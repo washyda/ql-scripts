@@ -9,15 +9,15 @@
  * ==================== NatFrp 签到与流量查询脚本使用说明 ====================
  * 1. 任务用途：
  *    - 基于官方 NatFrp API v4 自动查询账号剩余流量、已用流量及会员组配置。
- *    - 自动提交每日签到请求，包含纯本地 Node.js 极验拼图缺口分析与密文算力解算。
+ *    - 自动提交每日签到请求；若服务端要求交互式极验，脚本会明确提示。
  *
  * 2. 环境变量配置：
  *    - `NATFRP_TOKEN`: NatFrp 访问密钥 / Token (支持获取流量与账号配置)。
  *    - `NATFRP_COOKIE`: NatFrp 网页端 Session Cookie (用于自动化极验拼图签到)。
  *    - 注：`NATFRP_TOKEN` 与 `NATFRP_COOKIE` 填其一即可，多账号使用 `&` 或换行分隔。
  *
- * 3. 运行环境与零依赖：
- *    - 纯本地 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
+ * 3. 运行环境：
+ *    - 纯 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
  * ===========================================================================
  */
 
@@ -111,6 +111,20 @@ export function buildNatFrpHeaders(
   return headers;
 }
 
+/**
+ * 签到接口只接受 SESSION 鉴权。即使同时配置了 NATFRP_TOKEN，
+ * 签到请求也不得携带 Authorization，否则服务端会按 Token 鉴权并拒绝。
+ */
+export function buildNatFrpSessionHeaders(
+  cookie: string,
+): Record<string, string> {
+  const headers = buildNatFrpHeaders(cookie);
+  delete headers["Authorization"];
+  headers["Origin"] = "https://www.natfrp.com";
+  headers["Referer"] = "https://www.natfrp.com/user/";
+  return headers;
+}
+
 /** 基于官方 API v4 获取用户信息及流量配置 */
 export async function fetchUserInfoV4(
   credential: string,
@@ -138,60 +152,10 @@ export interface NatFrpCaptchaResult {
   seccode: string;
 }
 
-/**
- * 纯本地算法：分析拼图背景图像素矩阵，寻找凹槽缺口 X 轴偏移量
- * 零第三方 API、零无头浏览器依赖
- */
-export function detectGeetestGap(
-  width: number,
-  height: number,
-  pixelData: Uint8Array,
-): number {
-  let bestX = 60;
-  let maxDarkScore = 0;
-
-  for (let x = 35; x < width - 35; x++) {
-    let darkScore = 0;
-    for (let y = 15; y < height - 15; y++) {
-      const idx = (y * width + x) * 4;
-      const r = pixelData[idx] ?? 255;
-      const g = pixelData[idx + 1] ?? 255;
-      const b = pixelData[idx + 2] ?? 255;
-      const brightness = (r + g + b) / 3;
-
-      if (brightness < 75) {
-        darkScore += 1;
-      }
-    }
-    if (darkScore > maxDarkScore) {
-      maxDarkScore = darkScore;
-      bestX = x;
-    }
-  }
-
-  return bestX;
-}
-
-/**
- * 纯本地计算极验 3.0 拼图距离密文与校验串
- * 基于本地距离偏移生成离线签名
- */
-export function solveGeetestLocally(
-  challenge: string,
-  distanceX: number,
-): NatFrpCaptchaResult {
-  const fakeValidate = `${challenge}_${Math.floor(distanceX)}`;
-  return {
-    validate: fakeValidate,
-    seccode: `${fakeValidate}|jordan`,
-  };
-}
-
 /** 尝试发起自动签到请求 (支持提交极验验证码参数) */
 export async function executeCheckinV4(
   credential: string,
   captchaParams?: { challenge: string; validate: string; seccode: string },
-  extraToken?: string,
 ): Promise<{
   success: boolean;
   message: string;
@@ -199,7 +163,7 @@ export async function executeCheckinV4(
   challenge?: string | undefined;
   needCaptcha?: boolean | undefined;
 }> {
-  const headers = buildNatFrpHeaders(credential, extraToken);
+  const headers = buildNatFrpSessionHeaders(credential);
   const postData: Record<string, unknown> = {
     sign: true,
   };
@@ -304,36 +268,12 @@ export const natfrpCheckinTask = defineTask({
 
       // 2. 执行签到
       logger.info("正在请求 NatFrp 自动签到...");
-      let checkinResult = await executeCheckinV4(
-        credential,
-        undefined,
-        extraToken,
-      );
+      let checkinResult = await executeCheckinV4(credential, undefined);
 
-      // 若触发人机极验验证码，使用纯本地算法解算验证码
+      // 极验的 validate/seccode 必须由真实交互验证产生，不能本地伪造。
       if (!checkinResult.success && checkinResult.needCaptcha) {
-        const challenge = checkinResult.challenge || "";
-
-        logger.info(
-          "检测到极验拼图验证码，正在启动纯本地 Node.js 图像缺口分析算法...",
-        );
-        const dummyMatrix = new Uint8Array(260 * 160 * 4);
-        const detectedX = detectGeetestGap(260, 160, dummyMatrix);
-        logger.info(
-          `本地算法计算得出缺口 X 轴距离: ${detectedX}px，构造本地解算密文...`,
-        );
-
-        const captchaSolved = solveGeetestLocally(challenge, detectedX);
-
-        logger.info("本地密文构造完成！二次提交签到...");
-        checkinResult = await executeCheckinV4(
-          credential,
-          {
-            challenge,
-            validate: captchaSolved.validate,
-            seccode: captchaSolved.seccode,
-          },
-          extraToken,
+        logger.warn(
+          "签到接口要求完成极验交互验证，当前无头脚本无法安全生成有效的 validate/seccode，请在官网完成签到。",
         );
       }
 
@@ -354,17 +294,17 @@ export const natfrpCheckinTask = defineTask({
             );
           } else {
             logger.warn(
-              "提示: 当前配置的 Session Cookie 在 NatFrp 服务端 Session/Redis 内存中已过期失效。",
+              "提示: 官方 api.natfrp.com 跨域头硬编码关停了 Cookie 凭证 (access-control-allow-credentials: false)，拒绝纯 HTTP API 自动签到。",
             );
             logger.info(
-              "解决办法: 请在浏览器中重新登录 https://www.natfrp.com/user/，按 F12 -> 「网络 (Network)」 -> 点击任意请求复制最新的 `PHPSESSID` 填入 NATFRP_COOKIE 即可全自动过极验签到。",
+              "官方限制: 每日签到被强行限定只能在 https://www.natfrp.com/user/ 面板中通过浏览器手动点击触发。",
             );
           }
         }
       }
 
       // 3. 重新获取更新后的账号与流量配置
-      const userInfoAfter = await fetchUserInfoV4(credential);
+      const userInfoAfter = await fetchUserInfoV4(credential, extraToken);
       if (userInfoAfter && Array.isArray(userInfoAfter.traffic)) {
         logger.info("--- 当前最新流量配置 ---");
         logger.info(`最新已用流量: ${formatTraffic(userInfoAfter.traffic[0])}`);

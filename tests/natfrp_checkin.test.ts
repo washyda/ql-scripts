@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildNatFrpHeaders,
-  detectGeetestGap,
+  buildNatFrpSessionHeaders,
   formatTraffic,
   maskUsername,
-  solveGeetestLocally,
 } from "../scripts/natfrp_checkin";
 
 test("formatTraffic handles bytes and GiB correctly", () => {
@@ -39,12 +38,13 @@ test("buildNatFrpHeaders identifies tokens vs cookies correctly", () => {
   assert.equal(cookieHeaders["Authorization"], undefined);
 });
 
-test("detectGeetestGap and solveGeetestLocally perform local gap detection and hash generation", () => {
-  const dummyPixelData = new Uint8Array(260 * 160 * 4);
-  const gapX = detectGeetestGap(260, 160, dummyPixelData);
-  assert.ok(gapX >= 35 && gapX <= 225, "识别到的缺口位置应在合规范围");
+test("buildNatFrpSessionHeaders never sends token authentication", () => {
+  const sessionHeaders = buildNatFrpSessionHeaders(
+    "PHPSESSID=test-session; lang=zh-CN",
+  );
 
-  const localRes = solveGeetestLocally("challenge_test_123", gapX);
-  assert.ok(localRes.validate.startsWith("challenge_test_123_"));
-  assert.ok(localRes.seccode.includes("|jordan"));
+  assert.equal(sessionHeaders["Cookie"], "PHPSESSID=test-session; lang=zh-CN");
+  assert.equal(sessionHeaders["Authorization"], undefined);
+  assert.equal(sessionHeaders["Origin"], "https://www.natfrp.com");
+  assert.equal(sessionHeaders["Referer"], "https://www.natfrp.com/user/");
 });
