@@ -190,7 +190,9 @@ export async function executeCheckinV4(
   needCaptcha?: boolean | undefined;
 }> {
   const headers = buildNatFrpHeaders(credential);
-  const postData: Record<string, string> = {};
+  const postData: Record<string, unknown> = {
+    sign: true,
+  };
   if (captchaParams) {
     postData["geetest_challenge"] = captchaParams.challenge;
     postData["geetest_validate"] = captchaParams.validate;
@@ -204,7 +206,7 @@ export async function executeCheckinV4(
       url: "https://api.natfrp.com/v4/user/sign",
       method: "POST",
       headers,
-      data: Object.keys(postData).length > 0 ? postData : undefined,
+      data: postData,
     });
 
     const msg = res.msg || res.message || "无返回信息";
