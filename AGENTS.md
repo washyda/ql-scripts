@@ -11,7 +11,7 @@
 ## 开发规则
 
 1. 每个任务必须是 `scripts/` 第一层的 `.ts` 文件，文件名使用小写字母、数字和下划线。
-2. 每个任务顶部必须声明 `@name`、`@description`、六段 `@cron` 和正确的 `script-path`。
+2. 每个任务顶部必须声明 `@name`、`@description`、六段 `@cron` 和正确的 `script-path`，且紧跟详细的中文使用说明注释（包含任务功能、所需环境变量、多账号分割方式及具体配置方法）。
 3. 任务应通过 `defineTask` 和 `runTask` 使用统一生命周期与退出码。
 4. 网络请求复用 `src/core/http.ts`，时间处理复用 `src/core/time.ts`，环境变量复用 `src/core/env.ts`。
 5. 密钥、Cookie、Token 和个人数据不得写入源码、测试样例或完整日志。

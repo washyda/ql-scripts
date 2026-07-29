@@ -5,6 +5,15 @@
  * cron "0 0 8 * * *" script-path=scripts/example.ts,tag=ql-scripts
  */
 
+/**
+ * ==================== 使用说明 ====================
+ * 1. 任务说明：请在此简述任务功能与调用逻辑。
+ * 2. 环境变量：
+ *    - `EXAMPLE_ACCOUNTS`: 必需/可选，支持使用 `&` 或换行分隔多个账号。
+ * 3. 示例配置：可以在青龙面板「环境变量」中添加该变量。
+ * ==================================================
+ */
+
 import { optionalEnv, splitAccounts } from "../src/core/env";
 import { request } from "../src/core/http";
 import { formatTime } from "../src/core/time";

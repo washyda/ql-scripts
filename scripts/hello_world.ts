@@ -5,6 +5,14 @@
  * cron "0 0 8 * * *" script-path=scripts/hello_world.ts,tag=ql-scripts
  */
 
+/**
+ * ==================== Hello World 脚本使用说明 ====================
+ * 1. 任务用途：验证青龙订阅、TypeScript 执行环境及环境变量读取。
+ * 2. 环境变量：
+ *    - `HELLO_NAME`: 可选，自定义问候名称，默认值为 `QingLong`。
+ * ==================================================================
+ */
+
 import { optionalEnv } from "../src/core/env";
 import { defineTask, runTask } from "../src/core/task";
 
