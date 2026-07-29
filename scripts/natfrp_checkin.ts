@@ -319,9 +319,24 @@ export const natfrpCheckinTask = defineTask({
       } else {
         logger.warn(`签到提示: ${checkinResult.message}`);
         if (checkinResult.message.includes("SESSION")) {
-          logger.info(
-            "提示: 官方签到接口限制仅支持 SESSION / Cookie 鉴权。若需签到，请在 NATFRP_COOKIE 环境变量中配置网页登录 Session。",
-          );
+          const isGaCookieOnly =
+            credential.includes("_ga") &&
+            !credential.includes("session") &&
+            !credential.includes("token") &&
+            !credential.includes("PHPSESSID");
+
+          if (isGaCookieOnly) {
+            logger.warn(
+              "提示: 检测到配置的 Cookie 仅包含 Google Analytics 统计参数 (_ga / _gid)，非账号登录 Session。",
+            );
+            logger.info(
+              "正确获取方法：在 https://www.natfrp.com/user/ 登录后，按 F12 -> 切换到「应用 (Application)」 -> 展开「本地存储 (Local Storage)」 -> 复制名位 `token` 或 `session` 的值并填入 NATFRP_COOKIE 即可。",
+            );
+          } else {
+            logger.info(
+              "提示: 官方签到接口限制仅支持 SESSION / Cookie 鉴权。若需签到，请在 NATFRP_COOKIE 环境变量中配置网页登录 Session。",
+            );
+          }
         }
       }
 
