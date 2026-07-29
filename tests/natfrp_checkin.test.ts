@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  buildNatFrpCheckinRequest,
   buildNatFrpHeaders,
   buildNatFrpSessionHeaders,
   containsPhpSession,
@@ -54,4 +55,14 @@ test("containsPhpSession recognizes PHPSESSID without exposing its value", () =>
   assert.equal(containsPhpSession("PHPSESSID=secret; _ga=analytics"), true);
   assert.equal(containsPhpSession("_ga=analytics; PHPSESSID=secret"), true);
   assert.equal(containsPhpSession("session=secret; _ga=analytics"), false);
+});
+
+test("buildNatFrpCheckinRequest matches the website CGI request", () => {
+  const config = buildNatFrpCheckinRequest("PHPSESSID=test-session");
+
+  assert.equal(config.url, "https://www.natfrp.com/cgi/v4/user/sign");
+  assert.equal(config.method, "POST");
+  assert.deepEqual(config.data, {});
+  assert.equal(config.headers?.["Cookie"], "PHPSESSID=test-session");
+  assert.equal(config.headers?.["Authorization"], undefined);
 });

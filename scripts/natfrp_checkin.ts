@@ -22,7 +22,7 @@
  * ===========================================================================
  */
 
-import axios from "axios";
+import axios, { type AxiosRequestConfig } from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
 import { request } from "../src/core/http";
 import { defineTask, runTask } from "../src/core/task";
@@ -130,6 +130,26 @@ export function containsPhpSession(cookie: string): boolean {
   return /(?:^|;\s*)PHPSESSID=/iu.test(cookie);
 }
 
+export function buildNatFrpCheckinRequest(
+  credential: string,
+  captchaParams?: { challenge: string; validate: string; seccode: string },
+): AxiosRequestConfig {
+  const data: Record<string, unknown> = {};
+  if (captchaParams) {
+    data["geetest_challenge"] = captchaParams.challenge;
+    data["geetest_validate"] = captchaParams.validate;
+    data["geetest_seccode"] = captchaParams.seccode;
+  }
+
+  return {
+    // 官网用户中心使用同源 /cgi/v4/ 网关；PHPSESSID 不能发往 api.natfrp.com。
+    url: "https://www.natfrp.com/cgi/v4/user/sign",
+    method: "POST",
+    headers: buildNatFrpSessionHeaders(credential),
+    data,
+  };
+}
+
 /** 基于官方 API v4 获取用户信息及流量配置 */
 export async function fetchUserInfoV4(
   credential: string,
@@ -168,25 +188,10 @@ export async function executeCheckinV4(
   challenge?: string | undefined;
   needCaptcha?: boolean | undefined;
 }> {
-  const headers = buildNatFrpSessionHeaders(credential);
-  const postData: Record<string, unknown> = {
-    sign: true,
-  };
-  if (captchaParams) {
-    postData["geetest_challenge"] = captchaParams.challenge;
-    postData["geetest_validate"] = captchaParams.validate;
-    postData["geetest_seccode"] = captchaParams.seccode;
-  }
-
   try {
     const res = await request<
       NatFrpApiResponse<{ gt?: string; challenge?: string }>
-    >({
-      url: "https://api.natfrp.com/v4/user/sign",
-      method: "POST",
-      headers,
-      data: postData,
-    });
+    >(buildNatFrpCheckinRequest(credential, captchaParams));
 
     const msg = res.msg || res.message || "无返回信息";
     const gt = res.data?.gt;
@@ -309,10 +314,10 @@ export const natfrpCheckinTask = defineTask({
             );
           } else {
             logger.warn(
-              "提示: 官方 api.natfrp.com 跨域头硬编码关停了 Cookie 凭证 (access-control-allow-credentials: false)，拒绝纯 HTTP API 自动签到。",
+              "提示: 官网 CGI 网关未接受当前 PHPSESSID；请确认 Cookie 来自 www.natfrp.com 当前登录会话且尚未失效。",
             );
             logger.info(
-              "官方限制: 每日签到被强行限定只能在 https://www.natfrp.com/user/ 面板中通过浏览器手动点击触发。",
+              "请退出后重新登录 https://www.natfrp.com/user/，再从 www.natfrp.com 的 Network 请求中复制完整 Cookie。",
             );
           }
         }
