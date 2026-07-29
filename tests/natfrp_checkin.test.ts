@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   buildNatFrpHeaders,
   buildNatFrpSessionHeaders,
+  containsPhpSession,
   formatTraffic,
   maskUsername,
 } from "../scripts/natfrp_checkin";
@@ -47,4 +48,10 @@ test("buildNatFrpSessionHeaders never sends token authentication", () => {
   assert.equal(sessionHeaders["Authorization"], undefined);
   assert.equal(sessionHeaders["Origin"], "https://www.natfrp.com");
   assert.equal(sessionHeaders["Referer"], "https://www.natfrp.com/user/");
+});
+
+test("containsPhpSession recognizes PHPSESSID without exposing its value", () => {
+  assert.equal(containsPhpSession("PHPSESSID=secret; _ga=analytics"), true);
+  assert.equal(containsPhpSession("_ga=analytics; PHPSESSID=secret"), true);
+  assert.equal(containsPhpSession("session=secret; _ga=analytics"), false);
 });

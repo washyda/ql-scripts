@@ -14,7 +14,8 @@
  * 2. 环境变量配置：
  *    - `NATFRP_TOKEN`: NatFrp 访问密钥 / Token (支持获取流量与账号配置)。
  *    - `NATFRP_COOKIE`: NatFrp 网页端 Session Cookie (用于自动化极验拼图签到)。
- *    - 注：`NATFRP_TOKEN` 与 `NATFRP_COOKIE` 填其一即可，多账号使用 `&` 或换行分隔。
+ *    - 查询信息可使用 Token 或 Cookie；自动签到必须配置 Cookie。
+ *    - 两者可以同时配置，多账号使用 `&` 或换行分隔并按顺序对应。
  *
  * 3. 运行环境：
  *    - 纯 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
@@ -125,6 +126,10 @@ export function buildNatFrpSessionHeaders(
   return headers;
 }
 
+export function containsPhpSession(cookie: string): boolean {
+  return /(?:^|;\s*)PHPSESSID=/iu.test(cookie);
+}
+
 /** 基于官方 API v4 获取用户信息及流量配置 */
 export async function fetchUserInfoV4(
   credential: string,
@@ -231,6 +236,9 @@ export const natfrpCheckinTask = defineTask({
     const accounts = splitAccounts(mainEnv);
     const extraTokens = tokenEnv ? splitAccounts(tokenEnv) : [];
     logger.info(`${formatTime()} 读取到 ${accounts.length} 个 NatFrp 账号`);
+    logger.info(
+      `鉴权配置: Token=${tokenEnv ? "已识别" : "未配置"}，Cookie=${cookieEnv ? "已识别" : "未配置"}${cookieEnv ? `，PHPSESSID=${containsPhpSession(accounts[0] || "") ? "已识别" : "未识别"}` : ""}`,
+    );
 
     for (const [index, credential] of accounts.entries()) {
       const extraToken = extraTokens[index] || extraTokens[0];
@@ -267,8 +275,15 @@ export const natfrpCheckinTask = defineTask({
       }
 
       // 2. 执行签到
-      logger.info("正在请求 NatFrp 自动签到...");
-      let checkinResult = await executeCheckinV4(credential, undefined);
+      if (!cookieEnv) {
+        logger.warn(
+          "未配置 NATFRP_COOKIE，Token 只能查询账号信息，已跳过自动签到。",
+        );
+        continue;
+      }
+
+      logger.info("正在使用纯 SESSION Cookie 请求 NatFrp 自动签到...");
+      const checkinResult = await executeCheckinV4(credential, undefined);
 
       // 极验的 validate/seccode 必须由真实交互验证产生，不能本地伪造。
       if (!checkinResult.success && checkinResult.needCaptcha) {
