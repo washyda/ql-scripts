@@ -1,0 +1,32 @@
+/**
+ * @name 请修改任务名称
+ * @description 请填写任务用途
+ * @cron 0 0 8 * * *
+ * cron "0 0 8 * * *" script-path=scripts/example.ts,tag=ql-scripts
+ */
+
+import { optionalEnv, splitAccounts } from "../src/core/env";
+import { request } from "../src/core/http";
+import { formatTime } from "../src/core/time";
+import { defineTask, runTask } from "../src/core/task";
+
+export const exampleTask = defineTask({
+  name: "请修改任务名称",
+  async run({ logger }) {
+    const accounts = splitAccounts(optionalEnv("EXAMPLE_ACCOUNTS"));
+    logger.info(`${formatTime()} 共读取到 ${accounts.length} 个账号`);
+
+    for (const [index] of accounts.entries()) {
+      logger.info(`开始处理账号 ${index + 1}`);
+      // 示例：const data = await request<Response>({ url, method: "GET" });
+      // TODO: 使用 request<T> 发起 axios 请求并编写实际业务逻辑。
+    }
+  },
+});
+
+// 保留导入提示；实际任务使用 request 后可删除本行。
+void request;
+
+if (require.main === module) {
+  void runTask(exampleTask);
+}

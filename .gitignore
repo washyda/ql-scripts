@@ -1,0 +1,8 @@
+node_modules/
+.idea/
+.vscode/
+coverage/
+*.log
+.DS_Store
+
+# scripts/ 下的 TypeScript 是青龙直接订阅和执行的任务源码。

@@ -1,0 +1,128 @@
+# 青龙 TypeScript 脚本库模板
+
+这是一个由青龙直接订阅并执行 TypeScript 源文件的脚本仓库，不生成或维护 JavaScript 产物。
+
+可执行任务统一放在 `scripts/` 目录，共享代码放在 `src/core/`。仓库自带 `scripts/hello_world.ts`，用于验证订阅、TypeScript 运行环境和环境变量读取。
+
+## 青龙面板订阅
+
+先把仓库推送到 GitHub、Gitee 或其他青龙能够访问的 Git 地址，然后进入青龙「订阅管理」新建订阅：
+
+| 配置项      | 建议值                               |
+| ----------- | ------------------------------------ |
+| 名称        | `ql-scripts`                         |
+| 类型        | 公开仓库；私有仓库按实际情况配置凭据 |
+| 仓库地址    | 仓库 HTTPS 克隆地址                  |
+| 分支        | `main`                               |
+| 定时规则    | `0 0 */6 * * *`                      |
+| 白名单/包含 | `^scripts/[^/]+\.ts$`                |
+| 黑名单/排除 | 留空                                 |
+| 依赖文件    | `^src/core/.*\.ts$`                  |
+| 文件后缀    | `ts`（面板有此项时填写）             |
+
+白名单只把 `scripts/` 下第一层 `.ts` 文件识别为定时任务；依赖文件规则会同时拉取任务引用的 `src/core/` 共享代码，但不会把共享代码创建成任务。
+
+保存后运行订阅，在「定时任务」中应出现 **Hello World 测试**。它的默认六段 cron 是每天 08:00：
+
+```cron
+0 0 8 * * *
+```
+
+## 命令行导入
+
+进入青龙容器终端，将 `REPOSITORY_URL` 替换成实际仓库地址：
+
+```bash
+ql repo "REPOSITORY_URL" "^scripts/[^/]+\.ts$" "" "^src/core/.*\.ts$" "main"
+```
+
+不同版本的 `ql repo` 参数可能有差异，参数不兼容时以面板订阅方式为准。
+
+如果旧版青龙只拉取文件、没有自动创建任务，可根据订阅日志中的仓库路径手动新建：
+
+```bash
+task <订阅仓库目录>/scripts/hello_world.ts
+```
+
+## Node.js 第三方依赖
+
+青龙本身负责 Node.js 和 TypeScript 脚本运行环境。本仓库使用的第三方运行依赖维护在 `package.json`：
+
+- `axios`：HTTP 请求
+- `moment`：时间处理
+
+在青龙「依赖管理」中新建 **NodeJS** 依赖并安装：
+
+```text
+axios
+moment
+```
+
+Hello World 本身不调用这两个包，因此即使还未安装也可以先运行验证。使用共享 HTTP 或时间工具的正式任务需要先安装对应依赖。
+
+## 环境变量
+
+Hello World 没有必填变量。可在「环境变量」中添加：
+
+| 名称         | 示例   | 是否必填 | 说明                            |
+| ------------ | ------ | -------- | ------------------------------- |
+| `HELLO_NAME` | `小明` | 否       | 自定义问候名称，默认 `QingLong` |
+
+运行日志示例：
+
+```text
+[INFO] 开始执行：Hello World 测试
+[INFO] Hello, 小明! TypeScript 脚本运行成功。
+[INFO] 执行完成
+```
+
+## 本地开发
+
+本地需要 Node.js 18 或更高版本：
+
+```bash
+npm install
+npm run dev:hello
+npm run check
+```
+
+| 命令                | 用途                                       |
+| ------------------- | ------------------------------------------ |
+| `npm run dev:hello` | 使用 tsx 直接运行 `scripts/hello_world.ts` |
+| `npm run typecheck` | TypeScript 严格类型检查                    |
+| `npm test`          | 运行单元测试                               |
+| `npm run format`    | 格式化仓库                                 |
+| `npm run check`     | 执行格式、类型和测试检查                   |
+
+## 新增任务
+
+1. 复制 `templates/task.ts.template` 为 `scripts/example.ts`。
+2. 修改脚本头中的名称、说明、cron 和 `script-path`。
+3. 编写业务逻辑并声明环境变量。
+4. 若使用 axios 或 moment，复用 `src/core/http.ts`、`src/core/time.ts`。
+5. 添加测试并执行 `npm run check`。
+6. 使用 `npx tsx scripts/example.ts` 做一次直接运行验证。
+
+不需要执行构建，也不要提交生成后的 `.js` 文件。
+
+## 目录结构
+
+```text
+.
+├─ scripts/
+│  └─ hello_world.ts       # 青龙直接订阅和执行的任务
+├─ src/core/               # 环境变量、日志、HTTP、时间和任务工具
+├─ templates/              # 可执行任务模板
+├─ tests/                  # 单元测试
+├─ docs/                   # 订阅、开发、维护和依赖文档
+├─ AGENTS.md               # 仓库维护约束
+├─ package.json            # 本地工具和运行依赖清单
+└─ tsconfig.json
+```
+
+详细规则：
+
+- [订阅与导入说明](docs/subscription.md)
+- [开发规范](docs/development.md)
+- [维护规则](docs/maintenance.md)
+- [运行时和依赖要求](docs/dependencies.md)
