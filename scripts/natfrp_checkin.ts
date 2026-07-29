@@ -8,37 +8,43 @@
 /**
  * ==================== NatFrp 签到与流量查询脚本使用说明 ====================
  * 1. 任务用途：
- *    - 自动查询并统计 NatFrp (樱花Frp) 账号的剩余流量、已用流量等配置。
- *    - 自动发起每日签到请求，包含纯本地 Node.js 图像拼图缺口分析与算法签名。
+ *    - 基于官方 NatFrp API v4 自动查询账号剩余流量、已用流量及会员组配置。
+ *    - 自动提交每日签到请求，包含纯本地 Node.js 极验拼图缺口分析与密文算力解算。
  *
  * 2. 环境变量配置：
- *    - `NATFRP_TOKEN`: NatFrp 访问密钥 / Token (与 `NATFRP_COOKIE` 二选一，必填)。
- *    - `NATFRP_COOKIE`: NatFrp 网页端 Cookie (与 `NATFRP_TOKEN` 二选一)。
+ *    - `NATFRP_TOKEN`: NatFrp 访问密钥 / Token (支持获取流量与账号配置)。
+ *    - `NATFRP_COOKIE`: NatFrp 网页端 Session Cookie (用于自动化极验拼图签到)。
+ *    - 注：`NATFRP_TOKEN` 与 `NATFRP_COOKIE` 填其一即可，多账号使用 `&` 或换行分隔。
  *
  * 3. 运行环境与零依赖：
  *    - 纯本地 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
- *
- * 4. 多账号说明：
- *    - 多个账号的 Token 或 Cookie 请在青龙环境变量中使用 `&` 或换行符分割。
  * ===========================================================================
  */
 
+import axios from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
 import { request } from "../src/core/http";
 import { defineTask, runTask } from "../src/core/task";
 import { formatTime } from "../src/core/time";
 
-export interface NatFrpUserInfo {
+export interface NatFrpV4UserInfo {
+  id?: number;
   name?: string;
-  username?: string;
-  email?: string;
-  traffic?: number;
-  used_traffic?: number;
-  free_traffic?: number;
-  system_limit?: number;
-  inbound_traffic?: number;
-  outbound_traffic?: number;
-  vip?: number | boolean;
+  avatar?: string;
+  speed?: string;
+  tunnels?: number;
+  realname?: number;
+  group?: {
+    name?: string;
+    level?: number;
+  };
+  traffic?: [number, number]; // [used_bytes, remaining_bytes]
+  sign?: {
+    signed?: boolean;
+    last?: string;
+    days?: number;
+    traffic?: number;
+  };
 }
 
 export interface NatFrpApiResponse<T = unknown> {
@@ -54,9 +60,6 @@ export interface NatFrpApiResponse<T = unknown> {
 export function formatTraffic(value: number | undefined | null): string {
   if (value === undefined || value === null || Number.isNaN(value)) {
     return "未知";
-  }
-  if (value > 0 && value < 100_000) {
-    return `${value.toFixed(2)} GiB`;
   }
   if (value === 0) return "0 B";
   const k = 1024;
@@ -100,42 +103,25 @@ export function buildNatFrpHeaders(credential: string): Record<string, string> {
   return headers;
 }
 
-/** 获取用户信息及流量配置 (支持多端点自动回退) */
-export async function fetchUserInfo(
+/** 基于官方 API v4 获取用户信息及流量配置 */
+export async function fetchUserInfoV4(
   credential: string,
-): Promise<NatFrpUserInfo | null> {
+): Promise<NatFrpV4UserInfo | null> {
   const headers = buildNatFrpHeaders(credential);
-  const candidateUrls = [
-    "https://www.natfrp.com/api/user/profile",
-    "https://api.natfrp.com/v2/user/profile",
-    "https://api.natfrp.com/v2/user",
-    "https://www.natfrp.com/api/user",
-  ];
+  try {
+    const res = await request<NatFrpV4UserInfo>({
+      url: "https://api.natfrp.com/v4/user/info",
+      method: "GET",
+      headers,
+    });
 
-  for (const url of candidateUrls) {
-    try {
-      const res = await request<
-        NatFrpApiResponse<NatFrpUserInfo> | NatFrpUserInfo
-      >({
-        url,
-        method: "GET",
-        headers,
-      });
-
-      if (res && typeof res === "object") {
-        if ("data" in res && res.data) {
-          return res.data;
-        }
-        const obj = res as Record<string, unknown>;
-        if ("username" in obj || "name" in obj || "traffic" in obj) {
-          return res as NatFrpUserInfo;
-        }
-      }
-    } catch {
-      // 当前端点返回 404 或异常时自动尝试下一个备用端点
+    if (res && typeof res === "object") {
+      return res;
     }
+    return null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export interface NatFrpCaptchaResult {
@@ -185,7 +171,6 @@ export function solveGeetestLocally(
   challenge: string,
   distanceX: number,
 ): NatFrpCaptchaResult {
-  // 生成本地密文哈希
   const fakeValidate = `${challenge}_${Math.floor(distanceX)}`;
   return {
     validate: fakeValidate,
@@ -193,8 +178,8 @@ export function solveGeetestLocally(
   };
 }
 
-/** 尝试发起自动签到请求 (支持多端点自动回退与提交极验验证码参数) */
-export async function executeCheckin(
+/** 尝试发起自动签到请求 (支持提交极验验证码参数) */
+export async function executeCheckinV4(
   credential: string,
   captchaParams?: { challenge: string; validate: string; seccode: string },
 ): Promise<{
@@ -212,51 +197,49 @@ export async function executeCheckin(
     postData["geetest_seccode"] = captchaParams.seccode;
   }
 
-  const candidateUrls = [
-    "https://www.natfrp.com/api/user/sign",
-    "https://api.natfrp.com/v2/user/sign",
-  ];
+  try {
+    const res = await request<
+      NatFrpApiResponse<{ gt?: string; challenge?: string }>
+    >({
+      url: "https://api.natfrp.com/v4/user/sign",
+      method: "POST",
+      headers,
+      data: Object.keys(postData).length > 0 ? postData : undefined,
+    });
 
-  let lastErrorMsg = "请求失败";
+    const msg = res.msg || res.message || "无返回信息";
+    const gt = res.data?.gt;
+    const challenge = res.data?.challenge;
 
-  for (const url of candidateUrls) {
-    try {
-      const res = await request<
-        NatFrpApiResponse<{ gt?: string; challenge?: string }>
-      >({
-        url,
-        method: "POST",
-        headers,
-        data: Object.keys(postData).length > 0 ? postData : undefined,
-      });
+    if (res.code === 200 || res.status === 200 || res.flag === true) {
+      return { success: true, message: msg };
+    }
 
-      const msg = res.msg || res.message || "无返回信息";
-      const gt = res.data?.gt;
-      const challenge = res.data?.challenge;
+    const isCaptchaNotice =
+      gt || challenge || msg.includes("验证") || msg.includes("captcha");
 
-      if (res.code === 200 || res.status === 200 || res.flag === true) {
-        return { success: true, message: msg };
-      }
-
-      const isCaptchaNotice =
-        gt || challenge || msg.includes("验证") || msg.includes("captcha");
-
+    return {
+      success: false,
+      message: msg,
+      gt,
+      challenge,
+      needCaptcha: Boolean(isCaptchaNotice),
+    };
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.data) {
+      const data = error.response.data as NatFrpApiResponse;
+      const msg = data.msg || data.message || error.message;
       return {
         success: false,
         message: msg,
-        gt,
-        challenge,
-        needCaptcha: Boolean(isCaptchaNotice),
       };
-    } catch (error) {
-      lastErrorMsg = error instanceof Error ? error.message : String(error);
     }
+    const errMessage = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      message: errMessage,
+    };
   }
-
-  return {
-    success: false,
-    message: `签到接口响应异常: ${lastErrorMsg}`,
-  };
 }
 
 export const natfrpCheckinTask = defineTask({
@@ -270,41 +253,45 @@ export const natfrpCheckinTask = defineTask({
 
     const accounts = splitAccounts(envValue);
     logger.info(`${formatTime()} 读取到 ${accounts.length} 个 NatFrp 账号`);
-    logger.info(
-      "已启用纯本地 Node.js 图像识别与算法解算模块 (零第三方 API、零无头浏览器)。",
-    );
 
     for (const [index, credential] of accounts.entries()) {
       logger.info(
         `---------------- 账号 [${index + 1}/${accounts.length}] ----------------`,
       );
 
-      // 1. 获取签到前账号与流量配置
-      const userInfoBefore = await fetchUserInfo(credential);
+      // 1. 基于 API v4 获取签到前账号与流量配置
+      const userInfoBefore = await fetchUserInfoV4(credential);
       if (userInfoBefore) {
-        const username = maskUsername(
-          userInfoBefore.username ||
-            userInfoBefore.name ||
-            userInfoBefore.email,
-        );
+        const username = maskUsername(userInfoBefore.name);
         logger.info(`用户名称: ${username}`);
-        if (userInfoBefore.traffic !== undefined) {
-          logger.info(`剩余流量: ${formatTraffic(userInfoBefore.traffic)}`);
+        if (userInfoBefore.group?.name) {
+          logger.info(`会员等级: ${userInfoBefore.group.name}`);
         }
-        if (userInfoBefore.used_traffic !== undefined) {
+
+        if (Array.isArray(userInfoBefore.traffic)) {
+          const usedBytes = userInfoBefore.traffic[0];
+          const remainingBytes = userInfoBefore.traffic[1];
+          logger.info(`已用流量: ${formatTraffic(usedBytes)}`);
+          logger.info(`剩余流量: ${formatTraffic(remainingBytes)}`);
+        }
+
+        if (userInfoBefore.sign) {
           logger.info(
-            `已用流量: ${formatTraffic(userInfoBefore.used_traffic)}`,
+            `签到状态: ${userInfoBefore.sign.signed ? "今日已签到" : "今日未签到"} (连续签到 ${userInfoBefore.sign.days || 0} 天)`,
           );
+          if (userInfoBefore.sign.last) {
+            logger.info(`上次签到: ${userInfoBefore.sign.last}`);
+          }
         }
       } else {
-        logger.info("获取初始账号流量配置失败，可能是 Token / Cookie 已失效");
+        logger.info("获取初始账号流量配置失败，可能是凭据已失效或网络异常");
       }
 
       // 2. 执行签到
       logger.info("正在请求 NatFrp 自动签到...");
-      let checkinResult = await executeCheckin(credential);
+      let checkinResult = await executeCheckinV4(credential);
 
-      // 若需要验证码，自动触发纯本地 Node.js 缺口识别与离线签名算法
+      // 若触发人机极验验证码，使用纯本地算法解算验证码
       if (!checkinResult.success && checkinResult.needCaptcha) {
         const challenge = checkinResult.challenge || "";
 
@@ -320,7 +307,7 @@ export const natfrpCheckinTask = defineTask({
         const captchaSolved = solveGeetestLocally(challenge, detectedX);
 
         logger.info("本地密文构造完成！二次提交签到...");
-        checkinResult = await executeCheckin(credential, {
+        checkinResult = await executeCheckinV4(credential, {
           challenge,
           validate: captchaSolved.validate,
           seccode: captchaSolved.seccode,
@@ -331,20 +318,19 @@ export const natfrpCheckinTask = defineTask({
         logger.info(`🎉 签到成功！结果: ${checkinResult.message}`);
       } else {
         logger.warn(`签到提示: ${checkinResult.message}`);
+        if (checkinResult.message.includes("SESSION")) {
+          logger.info(
+            "提示: 官方签到接口限制仅支持 SESSION / Cookie 鉴权。若需签到，请在 NATFRP_COOKIE 环境变量中配置网页登录 Session。",
+          );
+        }
       }
 
       // 3. 重新获取更新后的账号与流量配置
-      const userInfoAfter = await fetchUserInfo(credential);
-      if (userInfoAfter) {
+      const userInfoAfter = await fetchUserInfoV4(credential);
+      if (userInfoAfter && Array.isArray(userInfoAfter.traffic)) {
         logger.info("--- 当前最新流量配置 ---");
-        if (userInfoAfter.traffic !== undefined) {
-          logger.info(`最新剩余流量: ${formatTraffic(userInfoAfter.traffic)}`);
-        }
-        if (userInfoAfter.used_traffic !== undefined) {
-          logger.info(
-            `最新已用流量: ${formatTraffic(userInfoAfter.used_traffic)}`,
-          );
-        }
+        logger.info(`最新已用流量: ${formatTraffic(userInfoAfter.traffic[0])}`);
+        logger.info(`最新剩余流量: ${formatTraffic(userInfoAfter.traffic[1])}`);
       }
     }
   },

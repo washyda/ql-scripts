@@ -12,15 +12,16 @@ test("formatTraffic handles bytes and GiB correctly", () => {
   assert.equal(formatTraffic(undefined), "未知");
   assert.equal(formatTraffic(null), "未知");
   assert.equal(formatTraffic(0), "0 B");
-  assert.equal(formatTraffic(10), "10.00 GiB");
+  assert.equal(formatTraffic(10), "10.00 B");
   assert.equal(formatTraffic(1024 * 1024), "1.00 MiB");
   assert.equal(formatTraffic(1073741824), "1.00 GiB");
+  assert.equal(formatTraffic(562891940169), "524.23 GiB");
 });
 
 test("maskUsername masks username and email correctly", () => {
   assert.equal(maskUsername(undefined), "***");
   assert.equal(maskUsername("ab"), "ab***");
-  assert.equal(maskUsername("natfrpuser"), "na***r");
+  assert.equal(maskUsername("washyda"), "wa***a");
   assert.equal(maskUsername("user@example.com"), "us***@example.com");
   assert.equal(maskUsername("a@b.com"), "a***@b.com");
 });
