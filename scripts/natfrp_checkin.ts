@@ -25,7 +25,7 @@
 
 import axios, { type AxiosRequestConfig } from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
-import { solveGeetestCaptcha } from "../src/core/geetest";
+import { solveGeetestViaJsdom } from "../src/core/geetest";
 import { request } from "../src/core/http";
 import { defineTask, runTask } from "../src/core/task";
 import { formatTime } from "../src/core/time";
@@ -361,8 +361,10 @@ export const natfrpCheckinTask = defineTask({
         const challenge =
           initialRes.challenge || `${Date.now()}${Math.random()}`;
 
-        logger.info(`获取到极验参数 gt=${gt}，启动像素拆解与算法解算...`);
-        const captchaSolved = await solveGeetestCaptcha(gt, challenge);
+        logger.info(
+          `获取到极验参数 gt=${gt}，启动 JSDOM 虚拟沙盒与算法解算...`,
+        );
+        const captchaSolved = await solveGeetestViaJsdom(gt, challenge);
         logger.info(
           `解算完成！构造提交极验校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
         );
@@ -382,7 +384,7 @@ export const natfrpCheckinTask = defineTask({
         logger.info("二次补尝：重新计算极验验证码参数并发送...");
         const gt = checkinResult.gt || "78aaca6a49add69b47090ba07c00fa3a";
         const challenge = checkinResult.challenge || `${Date.now()}`;
-        const captchaSolved = await solveGeetestCaptcha(gt, challenge);
+        const captchaSolved = await solveGeetestViaJsdom(gt, challenge);
 
         checkinResult = await executeCheckinV4(credential, {
           challenge,
