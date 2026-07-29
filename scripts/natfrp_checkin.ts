@@ -395,7 +395,11 @@ export const natfrpCheckinTask = defineTask({
         logger.info(`🎉 签到成功！结果: ${checkinResult.message}`);
       } else {
         logger.warn(`签到提示: ${checkinResult.message}`);
-        if (checkinResult.message.includes("SESSION")) {
+        if (checkinResult.message.includes("验证码校验失败")) {
+          logger.info(
+            "分析说明: 极验 3.0 服务端采用了二次验证机制 (服务端将校验码回传给 api.geevisit.com 校验服务器)。离线生成的算力校验码在没有浏览器引擎进行在线通信注册时会被极验服务端拦截。",
+          );
+        } else if (checkinResult.message.includes("SESSION")) {
           const isGaCookieOnly =
             credential.includes("_ga") &&
             !credential.includes("session") &&
