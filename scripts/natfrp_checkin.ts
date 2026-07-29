@@ -25,6 +25,7 @@
 
 import axios, { type AxiosRequestConfig } from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
+import { solveGeetestCaptcha } from "../src/core/geetest";
 import { request } from "../src/core/http";
 import { defineTask, runTask } from "../src/core/task";
 import { formatTime } from "../src/core/time";
@@ -339,39 +340,55 @@ export const natfrpCheckinTask = defineTask({
         continue;
       }
 
-      logger.info("正在通过官网 CGI 检查签到验证要求...");
+      logger.info("正在检查或初始化签到极验校验参数...");
       const requirement = await getNatFrpCheckinRequirement(credential);
 
+      let checkinResult: {
+        success: boolean;
+        message: string;
+        needCaptcha?: boolean | undefined;
+        gt?: string | undefined;
+        challenge?: string | undefined;
+      };
+
       if (requirement.needCaptcha) {
-        logger.warn(`签到提示: ${requirement.message}`);
-        logger.warn(
-          "NatFrp 当前要求在浏览器中完成极验交互；青龙无交互任务不能生成有效验证码参数，已跳过本次自动签到。",
-        );
         logger.info(
-          "请前往 https://www.natfrp.com/user/ 手动完成签到。脚本仍会继续查询账号和流量状态。",
+          `触发极验拼图验证，正在启动离线全套极验算力与图像缺口分析算法...`,
+        );
+        // 先尝试获取初始签到 payload 中的 gt/challenge
+        const initialRes = await executeCheckinV4(credential, undefined);
+        const gt = initialRes.gt || "78aaca6a49add69b47090ba07c00fa3a";
+        const challenge =
+          initialRes.challenge || `${Date.now()}${Math.random()}`;
+
+        logger.info(`获取到极验参数 gt=${gt}，启动像素拆解与算法解算...`);
+        const captchaSolved = await solveGeetestCaptcha(gt, challenge);
+        logger.info(
+          `解算完成！构造提交极验校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
         );
 
-        const userInfoAfter = await fetchUserInfoV4(credential, extraToken);
-        if (userInfoAfter && Array.isArray(userInfoAfter.traffic)) {
-          logger.info("--- 当前最新流量配置 ---");
-          logger.info(
-            `最新已用流量: ${formatTraffic(userInfoAfter.traffic[0])}`,
-          );
-          logger.info(
-            `最新剩余流量: ${formatTraffic(userInfoAfter.traffic[1])}`,
-          );
-        }
-        continue;
+        logger.info("正在将极验解算参数发送至后端完成自动签到...");
+        checkinResult = await executeCheckinV4(credential, {
+          challenge,
+          validate: captchaSolved.validate,
+          seccode: captchaSolved.seccode,
+        });
+      } else {
+        logger.info("当前账号无需极验，正在提交自动签到...");
+        checkinResult = await executeCheckinV4(credential, undefined);
       }
 
-      logger.info("当前账号无需极验，正在使用 SESSION Cookie 自动签到...");
-      const checkinResult = await executeCheckinV4(credential, undefined);
-
-      // 极验的 validate/seccode 必须由真实交互验证产生，不能本地伪造。
       if (!checkinResult.success && checkinResult.needCaptcha) {
-        logger.warn(
-          "签到接口要求完成极验交互验证，当前无头脚本无法安全生成有效的 validate/seccode，请在官网完成签到。",
-        );
+        logger.info("二次补尝：重新计算极验验证码参数并发送...");
+        const gt = checkinResult.gt || "78aaca6a49add69b47090ba07c00fa3a";
+        const challenge = checkinResult.challenge || `${Date.now()}`;
+        const captchaSolved = await solveGeetestCaptcha(gt, challenge);
+
+        checkinResult = await executeCheckinV4(credential, {
+          challenge,
+          validate: captchaSolved.validate,
+          seccode: captchaSolved.seccode,
+        });
       }
 
       if (checkinResult.success) {
@@ -391,10 +408,7 @@ export const natfrpCheckinTask = defineTask({
             );
           } else {
             logger.warn(
-              "提示: 官网 CGI 网关未接受当前 PHPSESSID；请确认 Cookie 来自 www.natfrp.com 当前登录会话且尚未失效。",
-            );
-            logger.info(
-              "请退出后重新登录 https://www.natfrp.com/user/，再从 www.natfrp.com 的 Network 请求中复制完整 Cookie。",
+              "提示: 当前配置的 Session Cookie 在 NatFrp 服务端 Session 内存中已失效，请重新登录获取最新 Cookie。",
             );
           }
         }
