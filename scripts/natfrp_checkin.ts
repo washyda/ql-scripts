@@ -100,30 +100,42 @@ export function buildNatFrpHeaders(credential: string): Record<string, string> {
   return headers;
 }
 
-/** 获取用户信息及流量配置 */
+/** 获取用户信息及流量配置 (支持多端点自动回退) */
 export async function fetchUserInfo(
   credential: string,
 ): Promise<NatFrpUserInfo | null> {
   const headers = buildNatFrpHeaders(credential);
-  try {
-    const res = await request<
-      NatFrpApiResponse<NatFrpUserInfo> | NatFrpUserInfo
-    >({
-      url: "https://api.natfrp.com/v2/user",
-      method: "GET",
-      headers,
-    });
+  const candidateUrls = [
+    "https://www.natfrp.com/api/user/profile",
+    "https://api.natfrp.com/v2/user/profile",
+    "https://api.natfrp.com/v2/user",
+    "https://www.natfrp.com/api/user",
+  ];
 
-    if (res && typeof res === "object") {
-      if ("data" in res && res.data) {
-        return res.data;
+  for (const url of candidateUrls) {
+    try {
+      const res = await request<
+        NatFrpApiResponse<NatFrpUserInfo> | NatFrpUserInfo
+      >({
+        url,
+        method: "GET",
+        headers,
+      });
+
+      if (res && typeof res === "object") {
+        if ("data" in res && res.data) {
+          return res.data;
+        }
+        const obj = res as Record<string, unknown>;
+        if ("username" in obj || "name" in obj || "traffic" in obj) {
+          return res as NatFrpUserInfo;
+        }
       }
-      return res as NatFrpUserInfo;
+    } catch {
+      // 当前端点返回 404 或异常时自动尝试下一个备用端点
     }
-    return null;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 export interface NatFrpCaptchaResult {
@@ -181,7 +193,7 @@ export function solveGeetestLocally(
   };
 }
 
-/** 尝试发起自动签到请求 (支持提交极验验证码参数) */
+/** 尝试发起自动签到请求 (支持多端点自动回退与提交极验验证码参数) */
 export async function executeCheckin(
   credential: string,
   captchaParams?: { challenge: string; validate: string; seccode: string },
@@ -193,48 +205,58 @@ export async function executeCheckin(
   needCaptcha?: boolean | undefined;
 }> {
   const headers = buildNatFrpHeaders(credential);
-  try {
-    const postData: Record<string, string> = {};
-    if (captchaParams) {
-      postData["geetest_challenge"] = captchaParams.challenge;
-      postData["geetest_validate"] = captchaParams.validate;
-      postData["geetest_seccode"] = captchaParams.seccode;
-    }
-
-    const res = await request<
-      NatFrpApiResponse<{ gt?: string; challenge?: string }>
-    >({
-      url: "https://api.natfrp.com/v2/user/sign",
-      method: "POST",
-      headers,
-      data: Object.keys(postData).length > 0 ? postData : undefined,
-    });
-
-    const msg = res.msg || res.message || "无返回信息";
-    const gt = res.data?.gt;
-    const challenge = res.data?.challenge;
-
-    if (res.code === 200 || res.status === 200 || res.flag === true) {
-      return { success: true, message: msg };
-    }
-
-    const isCaptchaNotice =
-      gt || challenge || msg.includes("验证") || msg.includes("captcha");
-
-    return {
-      success: false,
-      message: msg,
-      gt,
-      challenge,
-      needCaptcha: Boolean(isCaptchaNotice),
-    };
-  } catch (error) {
-    const errMessage = error instanceof Error ? error.message : String(error);
-    return {
-      success: false,
-      message: `签到请求响应异常: ${errMessage}`,
-    };
+  const postData: Record<string, string> = {};
+  if (captchaParams) {
+    postData["geetest_challenge"] = captchaParams.challenge;
+    postData["geetest_validate"] = captchaParams.validate;
+    postData["geetest_seccode"] = captchaParams.seccode;
   }
+
+  const candidateUrls = [
+    "https://www.natfrp.com/api/user/sign",
+    "https://api.natfrp.com/v2/user/sign",
+  ];
+
+  let lastErrorMsg = "请求失败";
+
+  for (const url of candidateUrls) {
+    try {
+      const res = await request<
+        NatFrpApiResponse<{ gt?: string; challenge?: string }>
+      >({
+        url,
+        method: "POST",
+        headers,
+        data: Object.keys(postData).length > 0 ? postData : undefined,
+      });
+
+      const msg = res.msg || res.message || "无返回信息";
+      const gt = res.data?.gt;
+      const challenge = res.data?.challenge;
+
+      if (res.code === 200 || res.status === 200 || res.flag === true) {
+        return { success: true, message: msg };
+      }
+
+      const isCaptchaNotice =
+        gt || challenge || msg.includes("验证") || msg.includes("captcha");
+
+      return {
+        success: false,
+        message: msg,
+        gt,
+        challenge,
+        needCaptcha: Boolean(isCaptchaNotice),
+      };
+    } catch (error) {
+      lastErrorMsg = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return {
+    success: false,
+    message: `签到接口响应异常: ${lastErrorMsg}`,
+  };
 }
 
 export const natfrpCheckinTask = defineTask({
