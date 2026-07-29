@@ -279,13 +279,22 @@ async function geetestLoad(
     `&client_type=web&risk_type=${encodeURIComponent(params.risk_type)}` +
     `&user_info=${encodeURIComponent(userInfo)}&lang=zho`;
 
-  const res = await client.get(url);
-  const parsed = extractJsonp(res.data as string, callback) as {
-    status: string;
-    data: GeetestLoadData;
-  };
+  const res = await client.get(url, { responseType: "text" });
+  let parsed: { status: string; data: GeetestLoadData };
+  try {
+    parsed = extractJsonp(String(res.data), callback) as {
+      status: string;
+      data: GeetestLoadData;
+    };
+  } catch (error) {
+    throw new Error(
+      `geetest /load 响应解析失败: ${String(res.data).slice(0, 300)} (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
   if (parsed.status !== "success") {
-    throw new Error(`geetest /load 状态非 success: ${parsed.status}`);
+    throw new Error(
+      `geetest /load 状态非 success: ${parsed.status} 原始: ${String(res.data).slice(0, 200)}`,
+    );
   }
   return {
     data: parsed.data,
@@ -319,8 +328,8 @@ async function geetestVerify(
     `&pt=${encodeURIComponent(args.pt)}` +
     `&w=${encodeURIComponent(args.w)}`;
 
-  const res = await client.get(url);
-  const parsed = extractJsonp(res.data as string, args.callback) as {
+  const res = await client.get(url, { responseType: "text" });
+  const parsed = extractJsonp(String(res.data), args.callback) as {
     status: string;
     data: { result: string; seccode: Record<string, string> };
   };
@@ -346,6 +355,11 @@ export async function solveAigisCaptcha(aigisRaw: string): Promise<string> {
     return Buffer.from(res.data as ArrayBuffer);
   };
 
+  if (!gtData.slice || !gtData.bg) {
+    throw new Error(
+      `geetest /load 未返回缺口图地址, slice=${gtData.slice}, bg=${gtData.bg}, captcha_type=${gtData.captcha_type}`,
+    );
+  }
   const sliceBytes = await downloadImage(gtData.slice);
   const bgBytes = await downloadImage(gtData.bg);
 
