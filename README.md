@@ -50,12 +50,14 @@ task <订阅仓库目录>/scripts/hello_world.ts
 
 - `axios`：HTTP 请求
 - `moment`：时间处理
+- `pngjs`：解码极验滑块缺口 PNG（云·原神、NatFrp 签到）
 
 在青龙「依赖管理」中新建 **NodeJS** 依赖并安装：
 
 ```text
 axios
 moment
+pngjs
 ```
 
 Hello World 本身不调用这两个包，因此即使还未安装也可以先运行验证。使用共享 HTTP 或时间工具的正式任务需要先安装对应依赖。

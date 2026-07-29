@@ -9,7 +9,7 @@
 | 分类       | 内容                                 | 安装位置                                                  |
 | ---------- | ------------------------------------ | --------------------------------------------------------- |
 | 基础运行时 | Node.js、青龙的 TypeScript 执行器    | 青龙基础环境提供                                          |
-| 运行依赖   | axios、moment                        | 青龙「依赖管理」的 NodeJS 类型，同时记录于 `dependencies` |
+| 运行依赖   | axios、moment、pngjs                 | 青龙「依赖管理」的 NodeJS 类型，同时记录于 `dependencies` |
 | 开发依赖   | TypeScript、tsx、Prettier、Node 类型 | 本地或 CI 通过 `npm install` 安装                         |
 
 青龙中需要建立以下 NodeJS 依赖：
@@ -17,7 +17,10 @@
 ```text
 axios
 moment
+pngjs
 ```
+
+> `pngjs` 用于云·原神与 NatFrp 签到脚本解码极验滑块缺口 PNG 图片（纯 JavaScript 实现，无需 native 编译）。
 
 ## 共享封装
 

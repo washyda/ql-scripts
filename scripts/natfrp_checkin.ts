@@ -20,12 +20,14 @@
  *
  * 3. 运行环境：
  *    - 纯 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
+ *    - 极验 3 滑块通过 pngjs 缺口识别 + Node vm 执行 RC4/RSA 加密 JS 离线解算，
+ *      完整复刻官方 api.geetest.com 的两次 get.php + ajax.php 链路拿真实 validate。
  * ===========================================================================
  */
 
 import axios, { type AxiosRequestConfig } from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
-import { solveGeetestViaJsdom } from "../src/core/geetest";
+import { solveGeetestV3 } from "../src/core/captcha/geetest_v3";
 import { request } from "../src/core/http";
 import { defineTask, runTask } from "../src/core/task";
 import { formatTime } from "../src/core/time";
@@ -353,7 +355,7 @@ export const natfrpCheckinTask = defineTask({
 
       if (requirement.needCaptcha) {
         logger.info(
-          `触发极验拼图验证，正在启动离线全套极验算力与图像缺口分析算法...`,
+          `触发极验拼图验证，正在离线解算极验 3 滑块缺口与算力校验码...`,
         );
         // 先尝试获取初始签到 payload 中的 gt/challenge
         const initialRes = await executeCheckinV4(credential, undefined);
@@ -361,17 +363,15 @@ export const natfrpCheckinTask = defineTask({
         const challenge =
           initialRes.challenge || `${Date.now()}${Math.random()}`;
 
+        logger.info(`获取到极验参数 gt=${gt}，开始完整滑块协议链路解算...`);
+        const captchaSolved = await solveGeetestV3(gt, challenge);
         logger.info(
-          `获取到极验参数 gt=${gt}，启动 JSDOM 虚拟沙盒与算法解算...`,
-        );
-        const captchaSolved = await solveGeetestViaJsdom(gt, challenge);
-        logger.info(
-          `解算完成！构造提交极验校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
+          `解算完成！极验下发的真实校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
         );
 
         logger.info("正在将极验解算参数发送至后端完成自动签到...");
         checkinResult = await executeCheckinV4(credential, {
-          challenge,
+          challenge: captchaSolved.challenge,
           validate: captchaSolved.validate,
           seccode: captchaSolved.seccode,
         });
@@ -381,13 +381,13 @@ export const natfrpCheckinTask = defineTask({
       }
 
       if (!checkinResult.success && checkinResult.needCaptcha) {
-        logger.info("二次补尝：重新计算极验验证码参数并发送...");
+        logger.info("二次补尝：重新解算极验滑块并发送...");
         const gt = checkinResult.gt || "78aaca6a49add69b47090ba07c00fa3a";
         const challenge = checkinResult.challenge || `${Date.now()}`;
-        const captchaSolved = await solveGeetestViaJsdom(gt, challenge);
+        const captchaSolved = await solveGeetestV3(gt, challenge);
 
         checkinResult = await executeCheckinV4(credential, {
-          challenge,
+          challenge: captchaSolved.challenge,
           validate: captchaSolved.validate,
           seccode: captchaSolved.seccode,
         });
@@ -399,7 +399,7 @@ export const natfrpCheckinTask = defineTask({
         logger.warn(`签到提示: ${checkinResult.message}`);
         if (checkinResult.message.includes("验证码校验失败")) {
           logger.info(
-            "分析说明: 极验 3.0 服务端采用了二次验证机制 (服务端将校验码回传给 api.geevisit.com 校验服务器)。离线生成的算力校验码在没有浏览器引擎进行在线通信注册时会被极验服务端拦截。",
+            "分析说明: 极验 validate 已解算并通过极验侧 ajax.php 校验，但 NatFrp 服务端二次校验仍拒绝。常见原因：缺口偏移识别偏差、challenge 已过期或 NatFrp 服务端风控。可观察日志中「解算完成」的 validate 是否为真实下发值后重试。",
           );
         } else if (checkinResult.message.includes("SESSION")) {
           const isGaCookieOnly =
