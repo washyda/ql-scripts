@@ -13,9 +13,10 @@
  *
  * 2. 环境变量配置：
  *    - `NATFRP_TOKEN`: NatFrp 访问密钥 / Token (支持获取流量与账号配置)。
- *    - `NATFRP_COOKIE`: NatFrp 网页端 Session Cookie (用于自动化极验拼图签到)。
+ *    - `NATFRP_COOKIE`: NatFrp 网页端 Session Cookie (用于检查并尝试签到)。
  *    - 查询信息可使用 Token 或 Cookie；自动签到必须配置 Cookie。
  *    - 两者可以同时配置，多账号使用 `&` 或换行分隔并按顺序对应。
+ *    - 若官网要求极验交互，青龙无交互任务会跳过签到并提示前往官网完成。
  *
  * 3. 运行环境：
  *    - 纯 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
@@ -177,6 +178,57 @@ export interface NatFrpCaptchaResult {
   seccode: string;
 }
 
+export interface NatFrpGeetestConfig {
+  gt?: string;
+  challenge?: string;
+  new_captcha?: boolean;
+  success?: boolean | number;
+}
+
+export function buildNatFrpCaptchaRequest(
+  credential: string,
+): AxiosRequestConfig {
+  return {
+    url: "https://www.natfrp.com/cgi/v4/user/sign?gt",
+    method: "GET",
+    headers: buildNatFrpSessionHeaders(credential),
+  };
+}
+
+export async function getNatFrpCheckinRequirement(credential: string): Promise<{
+  needCaptcha: boolean;
+  message: string;
+}> {
+  try {
+    const response = await request<
+      NatFrpApiResponse<NatFrpGeetestConfig> | NatFrpGeetestConfig
+    >(buildNatFrpCaptchaRequest(credential));
+    const wrapper = response as NatFrpApiResponse<NatFrpGeetestConfig>;
+    const config = wrapper.data || (response as NatFrpGeetestConfig);
+    const needCaptcha = Boolean(config.gt || config.challenge);
+    const message = wrapper.msg || wrapper.message || "";
+
+    return {
+      needCaptcha,
+      message:
+        message ||
+        (needCaptcha ? "签到需要完成极验交互验证" : "签到无需极验验证"),
+    };
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.data) {
+      const data = error.response.data as NatFrpApiResponse;
+      return {
+        needCaptcha: false,
+        message: data.msg || data.message || error.message,
+      };
+    }
+    return {
+      needCaptcha: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 /** 尝试发起自动签到请求 (支持提交极验验证码参数) */
 export async function executeCheckinV4(
   credential: string,
@@ -287,7 +339,32 @@ export const natfrpCheckinTask = defineTask({
         continue;
       }
 
-      logger.info("正在使用纯 SESSION Cookie 请求 NatFrp 自动签到...");
+      logger.info("正在通过官网 CGI 检查签到验证要求...");
+      const requirement = await getNatFrpCheckinRequirement(credential);
+
+      if (requirement.needCaptcha) {
+        logger.warn(`签到提示: ${requirement.message}`);
+        logger.warn(
+          "NatFrp 当前要求在浏览器中完成极验交互；青龙无交互任务不能生成有效验证码参数，已跳过本次自动签到。",
+        );
+        logger.info(
+          "请前往 https://www.natfrp.com/user/ 手动完成签到。脚本仍会继续查询账号和流量状态。",
+        );
+
+        const userInfoAfter = await fetchUserInfoV4(credential, extraToken);
+        if (userInfoAfter && Array.isArray(userInfoAfter.traffic)) {
+          logger.info("--- 当前最新流量配置 ---");
+          logger.info(
+            `最新已用流量: ${formatTraffic(userInfoAfter.traffic[0])}`,
+          );
+          logger.info(
+            `最新剩余流量: ${formatTraffic(userInfoAfter.traffic[1])}`,
+          );
+        }
+        continue;
+      }
+
+      logger.info("当前账号无需极验，正在使用 SESSION Cookie 自动签到...");
       const checkinResult = await executeCheckinV4(credential, undefined);
 
       // 极验的 validate/seccode 必须由真实交互验证产生，不能本地伪造。

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildNatFrpCheckinRequest,
+  buildNatFrpCaptchaRequest,
   buildNatFrpHeaders,
   buildNatFrpSessionHeaders,
   containsPhpSession,
@@ -63,6 +64,15 @@ test("buildNatFrpCheckinRequest matches the website CGI request", () => {
   assert.equal(config.url, "https://www.natfrp.com/cgi/v4/user/sign");
   assert.equal(config.method, "POST");
   assert.deepEqual(config.data, {});
+  assert.equal(config.headers?.["Cookie"], "PHPSESSID=test-session");
+  assert.equal(config.headers?.["Authorization"], undefined);
+});
+
+test("buildNatFrpCaptchaRequest matches the website Geetest bootstrap request", () => {
+  const config = buildNatFrpCaptchaRequest("PHPSESSID=test-session");
+
+  assert.equal(config.url, "https://www.natfrp.com/cgi/v4/user/sign?gt");
+  assert.equal(config.method, "GET");
   assert.equal(config.headers?.["Cookie"], "PHPSESSID=test-session");
   assert.equal(config.headers?.["Authorization"], undefined);
 });

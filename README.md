@@ -70,7 +70,7 @@ Hello World 没有必填变量。可在「环境变量」中添加：
 | `NATFRP_TOKEN`  | `your_api_token`     | 查询时必填 | NatFrp 访问密钥 / Token，多账号使用 `&` 或换行分隔       |
 | `NATFRP_COOKIE` | `PHPSESSID=...; ...` | 签到时必填 | 当前官网登录会话的完整 Cookie，多账号使用 `&` 或换行分隔 |
 
-NatFrp 的账号查询支持 Token，但签到接口只支持 SESSION。两个变量可以同时配置：脚本查询时可携带 Token，签到时只发送 Cookie，不会把 `Authorization` 头带入签到请求。
+NatFrp 的账号查询支持 Token，但签到接口只支持 SESSION。两个变量可以同时配置：脚本查询时可携带 Token，签到时只发送 Cookie，不会把 `Authorization` 头带入签到请求。脚本会先通过官网 CGI 检查验证要求；若账号需要极验交互，青龙无交互任务不会伪造验证码，而会提示前往官网手动完成签到。
 
 运行日志示例：
 
