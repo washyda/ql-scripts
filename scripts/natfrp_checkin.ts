@@ -352,15 +352,12 @@ export const natfrpCheckinTask = defineTask({
             logger.warn(
               "提示: 检测到配置的 Cookie 仅包含 Google Analytics 统计参数 (_ga / _gid)，非账号登录 Session。",
             );
-            logger.info(
-              "【获取正确登录 Session 的 2 种方法】:\n" +
-                "1. [Network 抓包法]: F12 -> 切换到「网络 (Network)」 -> 点击任意请求 -> 复制请求头中的 `Cookie` 完整字符串。\n" +
-                "2. [Console 打印法]: F12 -> 切换到「控制台 (Console)」 -> 运行 `console.log(document.cookie)` 复制输出结果。\n" +
-                "将获取到的字符串填入青龙 `NATFRP_COOKIE` 环境变量即可自动化过拼图签到。",
-            );
           } else {
+            logger.warn(
+              "提示: 当前配置的 Session Cookie 在 NatFrp 服务端 Session/Redis 内存中已过期失效。",
+            );
             logger.info(
-              "提示: 官方签到接口限制仅支持 SESSION / Cookie 鉴权。若需自动签到，请在 NATFRP_COOKIE 环境变量中配置网页登录 Session。",
+              "解决办法: 请在浏览器中重新登录 https://www.natfrp.com/user/，按 F12 -> 「网络 (Network)」 -> 点击任意请求复制最新的 `PHPSESSID` 填入 NATFRP_COOKIE 即可全自动过极验签到。",
             );
           }
         }
