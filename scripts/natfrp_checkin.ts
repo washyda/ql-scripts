@@ -84,8 +84,11 @@ export function maskUsername(name: string | undefined): string {
   return `${name.slice(0, 2)}***${name.slice(-1)}`;
 }
 
-/** 根据凭据生成请求头 */
-export function buildNatFrpHeaders(credential: string): Record<string, string> {
+/** 根据凭据生成请求头 (支持同时带入 Authorization 与 Cookie) */
+export function buildNatFrpHeaders(
+  credential: string,
+  extraToken?: string,
+): Record<string, string> {
   const headers: Record<string, string> = {
     "User-Agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -94,6 +97,11 @@ export function buildNatFrpHeaders(credential: string): Record<string, string> {
 
   if (credential.includes("=") || credential.includes(";")) {
     headers["Cookie"] = credential;
+    if (extraToken) {
+      headers["Authorization"] = extraToken.startsWith("Bearer ")
+        ? extraToken
+        : `Bearer ${extraToken}`;
+    }
   } else {
     headers["Authorization"] = credential.startsWith("Bearer ")
       ? credential
@@ -106,8 +114,9 @@ export function buildNatFrpHeaders(credential: string): Record<string, string> {
 /** 基于官方 API v4 获取用户信息及流量配置 */
 export async function fetchUserInfoV4(
   credential: string,
+  extraToken?: string,
 ): Promise<NatFrpV4UserInfo | null> {
-  const headers = buildNatFrpHeaders(credential);
+  const headers = buildNatFrpHeaders(credential, extraToken);
   try {
     const res = await request<NatFrpV4UserInfo>({
       url: "https://api.natfrp.com/v4/user/info",
@@ -182,6 +191,7 @@ export function solveGeetestLocally(
 export async function executeCheckinV4(
   credential: string,
   captchaParams?: { challenge: string; validate: string; seccode: string },
+  extraToken?: string,
 ): Promise<{
   success: boolean;
   message: string;
@@ -189,7 +199,7 @@ export async function executeCheckinV4(
   challenge?: string | undefined;
   needCaptcha?: boolean | undefined;
 }> {
-  const headers = buildNatFrpHeaders(credential);
+  const headers = buildNatFrpHeaders(credential, extraToken);
   const postData: Record<string, unknown> = {
     sign: true,
   };
@@ -247,22 +257,25 @@ export async function executeCheckinV4(
 export const natfrpCheckinTask = defineTask({
   name: "NatFrp 自动签到与流量查询",
   async run({ logger }) {
-    const envValue =
-      optionalEnv("NATFRP_TOKEN") || optionalEnv("NATFRP_COOKIE");
-    if (!envValue) {
+    const tokenEnv = optionalEnv("NATFRP_TOKEN");
+    const cookieEnv = optionalEnv("NATFRP_COOKIE");
+    const mainEnv = cookieEnv || tokenEnv;
+    if (!mainEnv) {
       requiredEnv("NATFRP_TOKEN"); // 抛出统一的环境变量缺少异常
     }
 
-    const accounts = splitAccounts(envValue);
+    const accounts = splitAccounts(mainEnv);
+    const extraTokens = tokenEnv ? splitAccounts(tokenEnv) : [];
     logger.info(`${formatTime()} 读取到 ${accounts.length} 个 NatFrp 账号`);
 
     for (const [index, credential] of accounts.entries()) {
+      const extraToken = extraTokens[index] || extraTokens[0];
       logger.info(
         `---------------- 账号 [${index + 1}/${accounts.length}] ----------------`,
       );
 
       // 1. 基于 API v4 获取签到前账号与流量配置
-      const userInfoBefore = await fetchUserInfoV4(credential);
+      const userInfoBefore = await fetchUserInfoV4(credential, extraToken);
       if (userInfoBefore) {
         const username = maskUsername(userInfoBefore.name);
         logger.info(`用户名称: ${username}`);
@@ -291,7 +304,11 @@ export const natfrpCheckinTask = defineTask({
 
       // 2. 执行签到
       logger.info("正在请求 NatFrp 自动签到...");
-      let checkinResult = await executeCheckinV4(credential);
+      let checkinResult = await executeCheckinV4(
+        credential,
+        undefined,
+        extraToken,
+      );
 
       // 若触发人机极验验证码，使用纯本地算法解算验证码
       if (!checkinResult.success && checkinResult.needCaptcha) {
@@ -309,11 +326,15 @@ export const natfrpCheckinTask = defineTask({
         const captchaSolved = solveGeetestLocally(challenge, detectedX);
 
         logger.info("本地密文构造完成！二次提交签到...");
-        checkinResult = await executeCheckinV4(credential, {
-          challenge,
-          validate: captchaSolved.validate,
-          seccode: captchaSolved.seccode,
-        });
+        checkinResult = await executeCheckinV4(
+          credential,
+          {
+            challenge,
+            validate: captchaSolved.validate,
+            seccode: captchaSolved.seccode,
+          },
+          extraToken,
+        );
       }
 
       if (checkinResult.success) {
