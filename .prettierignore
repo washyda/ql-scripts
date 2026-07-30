@@ -5,3 +5,5 @@ package-lock.json
 
 # 极验 3 第三方加密算法 JS 资源，不参与格式化
 src/core/captcha/v3/js
+# 由 v3/js 内联生成的算法源字符串文件，超长行，不格式化
+src/core/captcha/v3_js_sources.ts

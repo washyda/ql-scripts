@@ -10,18 +10,11 @@
  * 不能像平安版那样客户端 get_s() 自造。本桥只负责「给定 s，做加密」，
  * s 的来源由 geetest_v3.ts 协议层从 get.php /ajax.php 响应里取。
  */
-import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join, resolve } from "node:path";
 import { createContext, runInContext, type Context } from "node:vm";
+import { U_PARAMS_JS, SLIDE_A_JS, ENCRYPT_JS } from "./v3_js_sources";
 
-// 当前文件位于 src/core/captcha/，JS 资源在其下的 v3/js/。
-// 用模块相对路径解析，兼容 tsx(CJS) 与青龙运行时。
-const JS_DIR = resolve(__dirname, "v3", "js");
-
-function loadScript(ctx: Context, file: string): void {
-  // JS 源自 geetest-crack（GBK 写出，但实际为纯 ASCII，按 latin1 读取避免任何编码干扰）
-  const code = readFileSync(join(JS_DIR, file), "latin1");
+function loadScript(ctx: Context, code: string): void {
   runInContext(code, ctx);
 }
 
@@ -53,9 +46,9 @@ export class GeetestV3Js {
       JSON,
     });
     this.ctx = ctx;
-    loadScript(ctx, "u_params.js");
-    loadScript(ctx, "encrypt.js");
-    loadScript(ctx, "slide_a.js");
+    loadScript(ctx, U_PARAMS_JS);
+    loadScript(ctx, ENCRYPT_JS);
+    loadScript(ctx, SLIDE_A_JS);
   }
 
   private bind(): JsBindings {
