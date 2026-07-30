@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
     "axios": "^1.11.0",
     "moment": "^2.30.1",
     "pngjs": "^7.0.0"

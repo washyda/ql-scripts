@@ -44,7 +44,7 @@ test("v3 js bridge produces slide w from given s", () => {
   assert.equal(w.length, uenc.length + 256);
 });
 
-test("v3 offset detects a synthetic gap in restored images", () => {
+test("v3 offset detects a synthetic gap in restored images", async () => {
   const W = 312;
   const H = 160;
   const HALF = H / 2;
@@ -105,7 +105,7 @@ test("v3 offset detects a synthetic gap in restored images", () => {
   const full = buildScrambledSource(false);
   const gap = buildScrambledSource(true);
 
-  const result = calculateV3Offset(gap, full);
+  const result = await calculateV3Offset(gap, full);
   assert.ok(
     Math.abs(result.offset - (targetGapX - 3)) <= 5,
     `expected ~${targetGapX - 3}, got ${result.offset}`,

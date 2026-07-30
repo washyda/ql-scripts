@@ -11,6 +11,7 @@
  * s 的来源由 geetest_v3.ts 协议层从 get.php /ajax.php 响应里取。
  */
 import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { createContext, runInContext, type Context } from "node:vm";
 
@@ -34,7 +35,7 @@ type JsBindings = {
   get_a: (s: string) => string;
 };
 
-class GeetestV3Js {
+export class GeetestV3Js {
   private ctx: Context;
 
   constructor() {
@@ -84,6 +85,25 @@ class GeetestV3Js {
   /** slide_a：生成 a 段（RSA 加密的随机数等）。 */
   getA(s: string): string {
     return this.bind().get_a(s);
+  }
+
+  /** 自定义字符串 base64 编码（encrypt.js 的 GxkI.PwRX）。 */
+  pwrx(s: string): string {
+    return this.ctx.GxkI.PwRX(s);
+  }
+
+  /** 生成会话级 16 hex aeskey，替代缺失的 OfWp。 */
+  makeAeskey(): string {
+    return randomBytes(8).toString("hex");
+  }
+
+  /** 以 aeskey 做 AES-CBC 加密并自定义 base64 编码（encrypt.js 的
+   *  GxkI.QLsv(vUUf().encrypt1(plain, aeskey))）。
+   *  与 slide 的 _encrypt(u,s) 不同：这里密钥是客户端随机 aeskey，
+   *  而非 get.php 下发的服务端 s；用于 fullpage-w / ajax-w 构造。 */
+  aesEncrypt(plaintext: string, aeskey: string): string {
+    const bytes = new this.ctx.vUUf().encrypt1(plaintext, aeskey);
+    return this.ctx.GxkI.QLsv(bytes);
   }
 }
 export function getGeetestV3Js(): GeetestV3Js {

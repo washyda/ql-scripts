@@ -13,7 +13,7 @@
  */
 import axios, { type AxiosInstance } from "axios";
 import { calculateV3Offset } from "./geetest_v3_offset";
-import { getGeetestV3Js } from "./v3_js";
+import { getGeetestV3Js, type GeetestV3Js } from "./v3_js";
 
 const API_SERVER = "api.geetest.com";
 const STATIC_SERVER = "static.geetest.com";
@@ -41,6 +41,14 @@ interface GeetestResponseData {
   c?: Array<number>;
   api_server?: string;
   static_servers?: Array<string>;
+  // slide 出图响应顶层平铺（非 data 子层）
+  challenge?: string;
+  bg?: string;
+  fullbg?: string;
+  slice?: string;
+  result?: string;
+  validate?: string;
+  gt?: string;
 }
 
 function nowTimestamp(): string {
@@ -122,6 +130,157 @@ function buildSlideW(
   return js.encryptU(u as unknown as Record<string, unknown>, s) + js.getA(s);
 }
 
+/** 设备指纹 i 串模板（移植自 encrypt.js:1384 样本）。
+ *  仅 UA、时间戳、随机尾段动态替换，其余硬件/语言/canvas 子段保持自洽。 */
+function buildFingerprint(js: GeetestV3Js, ua: string): string {
+  const ts = Date.now();
+  const st = js.makeAeskey().slice(0, 6); // 6 位随机 hex
+  const seg = [
+    "5498",
+    "15079",
+    "CSS1Compat",
+    "3",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "1",
+    "3",
+    "9",
+    "3",
+    "2",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "-1",
+    "1",
+    "1",
+    "-1",
+    "-1",
+    "-1",
+    "0",
+    "0",
+    "0",
+    "0",
+    "150",
+    "937",
+    "1920",
+    "1040",
+    "zh-CN",
+    "zh-CN,zh",
+    "-1",
+    "1",
+    "24",
+    ua,
+    "1",
+    "1",
+    "1920",
+    "1080",
+    "1920",
+    "1040",
+    "1",
+    "1",
+    "1",
+    "-1",
+    "Win32",
+    "0",
+    "-8",
+    "71948b499cc30bdf612cc78c1f26b319",
+    "04de6db98e1f861edab7ec1bdfb800bf",
+    "",
+    "0",
+    "-1",
+    "0",
+    "4",
+    "",
+    `${ts}`,
+    "-1,-1,0,0,0,0,0,22,9,4,8,8,15,438,438,446,-1,-1,-1,-1",
+    "-1",
+    "-1",
+    "33",
+    "-1",
+    "1",
+    "71",
+    "17",
+    "false",
+    "false",
+    st,
+  ];
+  return seg.join("!!");
+}
+
+/** 构造第 3 步 fullpage-w = aesEncrypt(JSON(eHWD)) + getA(aeskey)。
+ *  eHWD 是配置态探测包（含指纹 i），aeskey 为会话级客户端密钥，
+ *  RSA 尾段让服务端解出 aeskey 再 AES 解 body。 */
+function buildFullpageW(
+  js: GeetestV3Js,
+  gt: string,
+  challenge: string,
+  aeskey: string,
+  ua: string,
+): string {
+  const eHWD = {
+    gt,
+    challenge,
+    offline: false,
+    product: "popup",
+    width: "100%",
+    api_server: API_SERVER,
+    https: true,
+    protocol: "https://",
+    static_servers: ["static.geetest.com"],
+    aspect_radio: { slide: 103, click: 128 },
+    type: "fullpage",
+    cc: 4,
+    ww: true,
+    i: buildFingerprint(js, ua),
+  };
+  return js.aesEncrypt(JSON.stringify(eHWD), aeskey) + js.getA(aeskey);
+}
+
+/** 构造第 4 步 ajax-w = aesEncrypt(JSON(u))（**无 RSA 尾段**）。
+ *  服务端已由 init 阶段 RSA 解出并按 gt+challenge 缓存会话 aeskey，
+ *  故 ajax 不重发 RSA；多挂尾段会破坏 AES 块对齐致 error_03。
+ *  字段编码非对称：i 单层 PwRX；hi/hh/rp 单层 PwRX；h/s 双层 PwRX；e 单层 PwRX(JSON)。 */
+function buildAjaxW(
+  js: GeetestV3Js,
+  gt: string,
+  challenge: string,
+  aeskey: string,
+  ua: string,
+  iStr: string,
+): string {
+  const passtime = 1500 + Math.floor(Math.random() * 1500);
+  const pw = (x: string) => js.pwrx(x);
+  const u = {
+    lang: "zh-cn",
+    type: "fullpage",
+    t: -1,
+    light: -1,
+    s: pw(pw("")),
+    h: pw(pw("")),
+    hh: pw(""),
+    i: pw(iStr),
+    hi: pw(""),
+    vip_order: -1,
+    ua,
+    ct: -1,
+    passtime,
+    reservedParam: null,
+    jType: "ajax",
+    rp: pw(gt + challenge + String(passtime)),
+    e: pw("{}"),
+  };
+  return js.aesEncrypt(JSON.stringify(u), aeskey);
+}
+
 export interface V3SolveResult {
   /** 最终用于提交 NatFrp 的 challenge（第二次 get.php 返回的更新值） */
   challenge: string;
@@ -145,32 +304,53 @@ export async function solveGeetestV3(
 ): Promise<V3SolveResult> {
   const client = createClient(referer);
   const baseParams = { gt, challenge, lang: "zh-cn" };
+  const js = getGeetestV3Js();
+  const ua = BROWSER_UA;
+  // 会话级 aeskey：init 与 ajax step1 共用，服务端据 init 的 RSA 尾段解出并缓存。
+  const aeskey = js.makeAeskey();
+  const iStr = buildFingerprint(js, ua);
 
-  // ---- 第一次 get.php：取初始 s/c 与验证信息 ----
+  // ---- 第一次 get.php（带 fullpage-w）：取初始 s/c/api_server，推进会话 ----
+  // 真实浏览器此步带 pt=0/client_type=web/w=fullpageW；不带 w 则后续 slide 不出图。
   const loadParams = {
     ...baseParams,
+    pt: "0",
+    client_type: "web",
+    w: buildFullpageW(js, gt, challenge, aeskey, ua),
     callback: `geetest_${nowTimestamp()}`,
   };
   const loadResp = await client.get(`https://${API_SERVER}/get.php`, {
     params: loadParams,
   });
   const loadData = parsePayload(loadResp.data);
-  // fullpage w 在官方标准 slide 链路里可省略，仅依赖服务端下发的 s
+  if (loadData.status && loadData.status !== "success") {
+    throw new Error(`极验首次 get.php 状态异常: ${loadData.status}`);
+  }
   let s = loadData.data?.s ?? loadData.s ?? "";
   if (!s) throw new Error("极验首次 get.php 未返回 s");
   // init 下发后续 slide 取图的主机（真实浏览器改打该 api_server）。
   const slideServer = loadData.data?.api_server ?? loadData.api_server ?? "";
+  const slideHost = slideServer || API_SERVER;
 
-  // ---- 第一次 ajax.php (step1)：确认进入滑块阶段 ----
-  const ajax1Resp = await client.get(`https://${API_SERVER}/ajax.php`, {
-    params: { ...baseParams, callback: `geetest_${nowTimestamp()}` },
+  // ---- 第一次 ajax.php (step1，带 ajax-w)：推进会话至 slide 阶段 ----
+  // 必须带 w 且**无 RSA 尾段**（服务端已缓存会话 aeskey）；返回 data.result==="slide"。
+  const ajax1Resp = await client.get(`https://${slideHost}/ajax.php`, {
+    params: {
+      ...baseParams,
+      pt: "0",
+      client_type: "web",
+      w: buildAjaxW(js, gt, challenge, aeskey, ua, iStr),
+      callback: `geetest_${nowTimestamp()}`,
+    },
   });
-  parsePayload(ajax1Resp.data); // step1 结果主要确认连通，字段忽略
+  const ajax1Data = parsePayload(ajax1Resp.data);
+  if (ajax1Data.status && ajax1Data.status !== "success") {
+    throw new Error(`极验 ajax step1 状态异常: ${ajax1Data.status}`);
+  }
 
   // ---- 第二次 get.php (is_next=slide3)：取缺口图 + 新 gt/challenge/s ----
   // 真实浏览器对 slide 取图改打下发的 api_server（多为 api.geevisit.com），
   // 且参数与抓包一致：https=false、protocol=https://、isPC、autoReset。
-  const slideHost = slideServer || API_SERVER;
   const slideParams = {
     ...baseParams,
     is_next: "true",
@@ -192,23 +372,29 @@ export async function solveGeetestV3(
   if (slideData.status && slideData.status !== "success") {
     throw new Error(`极验 slide get.php 状态异常: ${slideData.status}`);
   }
-  // slide 数据可能在 data 子对象或顶层，统一读取
+  // 出图响应为顶层平铺（非 data 子层）：bg/fullbg/slice/challenge/s 均优先取顶层。
   const sd = slideData.data ?? {};
-  const newChallenge = sd.challenge ?? challenge;
-  s = sd.s ?? slideData.s ?? s; // 用第二次 get.php 的新 s
-  const bgPath = sd.bg ?? sd.slice ?? "";
-  const fullbgPath = sd.fullbg ?? "";
+  const newChallenge = slideData.challenge ?? sd.challenge ?? challenge;
+  s = slideData.s ?? sd.s ?? s; // 用第二次 get.php 的新 s
+  const bgPath = slideData.bg ?? sd.bg ?? sd.slice ?? slideData.slice ?? "";
+  const fullbgPath = slideData.fullbg ?? sd.fullbg ?? "";
   if (!bgPath || !fullbgPath) {
     throw new Error("极验 slide get.php 未返回缺口图地址");
   }
 
   // 下载带缺口图与不带缺口图（static 服务器）。
-  // 真实抓包中 slide 图走 api.geevisit.com 而非固定 static.geetest.com，
-  // 故用 slideHost 作为图床基址；若路径已含协议则原样使用。
+  // slide 出图响应的 static_servers 指明图床（static.geevisit.com /
+  // static.geetest.com），图片走这里——直接打 api.geevisit.com 会 403。
+  // 优先用响应下发的 static_servers[0]（去尾斜杠），否则回退 slideHost。
+  const staticServer = (
+    slideData.static_servers?.[0] ??
+    sd.static_servers?.[0] ??
+    STATIC_SERVER
+  ).replace(/\/$/, "");
   const buildImageUrl = (path: string) =>
     path.startsWith("http")
       ? path
-      : `https://${slideHost}/${path.replace(/^\//, "")}`;
+      : `https://${staticServer}/${path.replace(/^\//, "")}`;
   const imgClient = createClient(referer);
   imgClient.defaults.headers.common["Accept"] = "image/*,*/*;q=0.8";
 
@@ -222,7 +408,7 @@ export async function solveGeetestV3(
   ).data as ArrayBuffer;
 
   // ---- 缺口识别 ----
-  const { offset } = calculateV3Offset(
+  const { offset } = await calculateV3Offset(
     Buffer.from(gapBytes),
     Buffer.from(fullBytes),
   );

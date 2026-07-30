@@ -8,7 +8,35 @@
  * 仅依赖 pngjs 解码 PNG；与米哈游极验 v4 的 Scharr/ZNCC 路线不同，
  * 极验 3 用的是更简单的还原 + 像素差异。
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { PNG } from "pngjs";
+import decodeJpeg, { init as initJpeg } from "@jsquash/jpeg/decode";
+
+// @jsquash/jpeg 默认 glue code 用浏览器 fetch 加载 wasm，Node 下报
+// "not implemented... yet"。首次解码前以文件读入的 wasm 显式初始化。
+// wasm 路径由 require.resolve 解析 decode.js 后定位其同包 codec 目录，
+// 跨源码/编译/青龙运行时一致。
+let jpegReady: Promise<void> | null = null;
+function ensureJpeg(): Promise<void> {
+  if (!jpegReady) {
+    jpegReady = (async () => {
+      const decodeJsPath = require.resolve("@jsquash/jpeg/decode");
+      const wasmPath = join(
+        dirname(decodeJsPath),
+        "codec",
+        "dec",
+        "mozjpeg_dec.wasm",
+      );
+      const wasmBinary = readFileSync(wasmPath);
+      await initJpeg({ wasmBinary } as never);
+    })().catch((e) => {
+      jpegReady = null; // 失败则允许下次重试
+      throw e;
+    });
+  }
+  return jpegReady;
+}
 
 interface Image {
   width: number;
@@ -17,11 +45,39 @@ interface Image {
   data: Uint8Array;
 }
 
+function isJpeg(bytes: Buffer): boolean {
+  // JPEG SOI magic: FF D8 FF
+  return (
+    bytes.length > 2 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  );
+}
+
 function decodePng(bytes: Buffer): Image {
   const png = PNG.sync.read(bytes);
   const data = new Uint8Array(png.width * png.height * 4);
   data.set(png.data as Uint8Array<ArrayBufferLike>);
   return { width: png.width, height: png.height, data };
+}
+
+/** 解码 PNG 或 JPEG 为 RGBA 行优先位图。JPEG 走 @jsquash/jpeg（异步 wasm）。 */
+async function decodeImage(bytes: Buffer): Promise<Image> {
+  if (isJpeg(bytes)) {
+    await ensureJpeg();
+    const ab = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer;
+    const img = await decodeJpeg(ab);
+    return {
+      width: img.width,
+      height: img.height,
+      data: new Uint8Array(img.data.buffer as ArrayBuffer),
+    };
+  }
+  return decodePng(bytes);
 }
 
 // 极验 3 打乱还原表：索引 c 处的像素块来自原图 img_list[c]。
@@ -82,15 +138,23 @@ export interface V3OffsetResult {
 /**
  * 计算带缺口图与不带缺口图的缺口横向偏移。
  *
- * @param gapBytes 带缺口的背景图 PNG 字节。
- * @param fullBytes 不带缺口的完整背景图 PNG 字节。
+ * @param gapBytes 带缺口的背景图字节（PNG 打乱图或 JPEG 成品图）。
+ * @param fullBytes 不带缺口的完整背景图字节（PNG 打乱图或 JPEG 成品图）。
  */
-export function calculateV3Offset(
+export async function calculateV3Offset(
   gapBytes: Buffer,
   fullBytes: Buffer,
-): V3OffsetResult {
-  const gap = restoreImage(decodePng(gapBytes));
-  const full = restoreImage(decodePng(fullBytes));
+): Promise<V3OffsetResult> {
+  const gapRaw = await decodeImage(gapBytes);
+  const fullRaw = await decodeImage(fullBytes);
+  // 旧版极验 3 下发打乱的 PNG 源图（宽 312），需按还原表还原；
+  // 新版（NatFrp multilink）下发的 JPEG 已是成品图，直接对比即可。
+  const isScrambledPng =
+    !isJpeg(gapBytes) &&
+    gapRaw.width === BG_WIDTH &&
+    fullRaw.width === BG_WIDTH;
+  const gap = isScrambledPng ? restoreImage(gapRaw) : gapRaw;
+  const full = isScrambledPng ? restoreImage(fullRaw) : fullRaw;
 
   const xs: number[] = [];
   for (let y = 0; y < gap.height; y++) {
