@@ -201,18 +201,26 @@ export function buildNatFrpCaptchaRequest(
 export async function getNatFrpCheckinRequirement(credential: string): Promise<{
   needCaptcha: boolean;
   message: string;
+  gt?: string | undefined;
+  challenge?: string | undefined;
 }> {
   try {
     const response = await request<
       NatFrpApiResponse<NatFrpGeetestConfig> | NatFrpGeetestConfig
     >(buildNatFrpCaptchaRequest(credential));
     const wrapper = response as NatFrpApiResponse<NatFrpGeetestConfig>;
+    // /sign?gt 的响应为平铺结构：{ online, gt, challenge, new_captcha }，
+    // 不在 data 子层；wrapper.data 兜底以兼容可能的包裹形态。
     const config = wrapper.data || (response as NatFrpGeetestConfig);
-    const needCaptcha = Boolean(config.gt || config.challenge);
+    const gt = config.gt;
+    const challenge = config.challenge;
+    const needCaptcha = Boolean(gt || challenge);
     const message = wrapper.msg || wrapper.message || "";
 
     return {
       needCaptcha,
+      gt,
+      challenge,
       message:
         message ||
         (needCaptcha ? "签到需要完成极验交互验证" : "签到无需极验验证"),
@@ -357,14 +365,16 @@ export const natfrpCheckinTask = defineTask({
         logger.info(
           `触发极验拼图验证，正在离线解算极验 3 滑块缺口与算力校验码...`,
         );
-        // 先尝试获取初始签到 payload 中的 gt/challenge
-        const initialRes = await executeCheckinV4(credential, undefined);
-        const gt = initialRes.gt || "78aaca6a49add69b47090ba07c00fa3a";
-        const challenge =
-          initialRes.challenge || `${Date.now()}${Math.random()}`;
+        // challenge 必须由 /sign?gt 签发，客户端不可自造；自造脏值会被
+        // 极验 nginx 层直接 403（不进业务逻辑）。
+        const gt = requirement.gt || "78aaca6a49add69b47090ba07c00fa3a";
+        if (!requirement.challenge) {
+          logger.warn("极验 challenge 未下发，无法启动滑块解算，跳过签到");
+          continue;
+        }
 
         logger.info(`获取到极验参数 gt=${gt}，开始完整滑块协议链路解算...`);
-        const captchaSolved = await solveGeetestV3(gt, challenge);
+        const captchaSolved = await solveGeetestV3(gt, requirement.challenge);
         logger.info(
           `解算完成！极验下发的真实校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
         );
@@ -382,9 +392,15 @@ export const natfrpCheckinTask = defineTask({
 
       if (!checkinResult.success && checkinResult.needCaptcha) {
         logger.info("二次补尝：重新解算极验滑块并发送...");
-        const gt = checkinResult.gt || "78aaca6a49add69b47090ba07c00fa3a";
-        const challenge = checkinResult.challenge || `${Date.now()}`;
-        const captchaSolved = await solveGeetestV3(gt, challenge);
+        const gt =
+          checkinResult.gt ||
+          requirement.gt ||
+          "78aaca6a49add69b47090ba07c00fa3a";
+        if (!checkinResult.challenge) {
+          logger.warn("二次补尝缺少极验 challenge，无法解算，跳过");
+          continue;
+        }
+        const captchaSolved = await solveGeetestV3(gt, checkinResult.challenge);
 
         checkinResult = await executeCheckinV4(credential, {
           challenge: captchaSolved.challenge,
