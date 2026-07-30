@@ -32,10 +32,15 @@ interface GeetestResponseData {
     slice?: string;
     result?: string;
     validate?: string;
+    // init 下发的运行时服务器；slide 取图须改打该主机
+    api_server?: string;
+    static_servers?: Array<string>;
   };
   // 顶层也可能是平铺 s/c（get.php 旧格式）
   s?: string;
   c?: Array<number>;
+  api_server?: string;
+  static_servers?: Array<string>;
 }
 
 function nowTimestamp(): string {
@@ -153,6 +158,8 @@ export async function solveGeetestV3(
   // fullpage w 在官方标准 slide 链路里可省略，仅依赖服务端下发的 s
   let s = loadData.data?.s ?? loadData.s ?? "";
   if (!s) throw new Error("极验首次 get.php 未返回 s");
+  // init 下发后续 slide 取图的主机（真实浏览器改打该 api_server）。
+  const slideServer = loadData.data?.api_server ?? loadData.api_server ?? "";
 
   // ---- 第一次 ajax.php (step1)：确认进入滑块阶段 ----
   const ajax1Resp = await client.get(`https://${API_SERVER}/ajax.php`, {
@@ -161,19 +168,24 @@ export async function solveGeetestV3(
   parsePayload(ajax1Resp.data); // step1 结果主要确认连通，字段忽略
 
   // ---- 第二次 get.php (is_next=slide3)：取缺口图 + 新 gt/challenge/s ----
+  // 真实浏览器对 slide 取图改打下发的 api_server（多为 api.geevisit.com），
+  // 且参数与抓包一致：https=false、protocol=https://、isPC、autoReset。
+  const slideHost = slideServer || API_SERVER;
   const slideParams = {
     ...baseParams,
     is_next: "true",
     type: "slide3",
-    https: "true",
+    https: "false",
     protocol: "https://",
     offline: "false",
     product: "embed",
-    api_server: API_SERVER,
+    api_server: slideHost,
+    isPC: "true",
+    autoReset: "true",
     width: "100%",
     callback: `geetest_${nowTimestamp()}`,
   };
-  const slideResp = await client.get(`https://${API_SERVER}/get.php`, {
+  const slideResp = await client.get(`https://${slideHost}/get.php`, {
     params: slideParams,
   });
   const slideData = parsePayload(slideResp.data);
@@ -190,11 +202,13 @@ export async function solveGeetestV3(
     throw new Error("极验 slide get.php 未返回缺口图地址");
   }
 
-  // 下载带缺口图与不带缺口图（static 服务器）
+  // 下载带缺口图与不带缺口图（static 服务器）。
+  // 真实抓包中 slide 图走 api.geevisit.com 而非固定 static.geetest.com，
+  // 故用 slideHost 作为图床基址；若路径已含协议则原样使用。
   const buildImageUrl = (path: string) =>
     path.startsWith("http")
       ? path
-      : `https://${STATIC_SERVER}/${path.replace(/^\//, "")}`;
+      : `https://${slideHost}/${path.replace(/^\//, "")}`;
   const imgClient = createClient(referer);
   imgClient.defaults.headers.common["Accept"] = "image/*,*/*;q=0.8";
 
@@ -218,7 +232,8 @@ export async function solveGeetestV3(
   const w = buildSlideW(gt, newChallenge, s, offset, track);
 
   // ---- 第二次 ajax.php (step2)：提交 w 拿 validate ----
-  const verifyData2 = await client.get(`https://${API_SERVER}/ajax.php`, {
+  // step2 与 slide 取图走同一 api_server（真实抓包验证提交亦在 geevisit）。
+  const verifyData2 = await client.get(`https://${slideHost}/ajax.php`, {
     params: {
       gt,
       challenge: newChallenge,
