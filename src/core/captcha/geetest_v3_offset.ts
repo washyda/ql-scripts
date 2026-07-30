@@ -11,25 +11,25 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { PNG } from "pngjs";
-import decodeJpeg, { init as initJpeg } from "@jsquash/jpeg/decode";
+// 顶层导入 decode（青龙 pnpm 仅装顶层 @jsquash/jpeg，子路径不可靠）。
+import { decode as decodeJpeg } from "@jsquash/jpeg";
 
 // @jsquash/jpeg 默认 glue code 用浏览器 fetch 加载 wasm，Node 下报
 // "not implemented... yet"。首次解码前以文件读入的 wasm 显式初始化。
-// wasm 路径由 require.resolve 解析 decode.js 后定位其同包 codec 目录，
-// 跨源码/编译/青龙运行时一致。
+// 青龙仅装顶层包，故经 require.resolve("@jsquash/jpeg") 得到 index.js，
+// 再定位同目录 decode.js 与 wasm，避免任何 @jsquash/jpeg/<子路径> 字面量。
 let jpegReady: Promise<void> | null = null;
 function ensureJpeg(): Promise<void> {
   if (!jpegReady) {
     jpegReady = (async () => {
-      const decodeJsPath = require.resolve("@jsquash/jpeg/decode");
-      const wasmPath = join(
-        dirname(decodeJsPath),
-        "codec",
-        "dec",
-        "mozjpeg_dec.wasm",
-      );
+      const indexPath = require.resolve("@jsquash/jpeg");
+      const pkgDir = dirname(indexPath);
+      const wasmPath = join(pkgDir, "codec", "dec", "mozjpeg_dec.wasm");
       const wasmBinary = readFileSync(wasmPath);
-      await initJpeg({ wasmBinary } as never);
+      const mod = require(join(pkgDir, "decode.js")) as {
+        init: (opts: unknown) => Promise<void>;
+      };
+      await mod.init({ wasmBinary });
     })().catch((e) => {
       jpegReady = null; // 失败则允许下次重试
       throw e;
