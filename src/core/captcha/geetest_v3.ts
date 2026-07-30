@@ -49,6 +49,22 @@ interface GeetestResponseData {
   result?: string;
   validate?: string;
   gt?: string;
+  // 错误响应载体：极验失败时多带 msg/error_code/desc 判定根因
+  msg?: string;
+  error_code?: string | number;
+  desc?: string;
+}
+
+/** 把极验响应体压成可读字符串，便于错误信息里定位根因（error_code/msg/result 等）。 */
+function describeResp(r: GeetestResponseData): string {
+  return JSON.stringify({
+    status: r.status,
+    msg: r.msg,
+    error_code: r.error_code,
+    desc: r.desc,
+    result: r.result ?? r.data?.result,
+    data: r.data,
+  });
 }
 
 function nowTimestamp(): string {
@@ -324,7 +340,9 @@ export async function solveGeetestV3(
   });
   const loadData = parsePayload(loadResp.data);
   if (loadData.status && loadData.status !== "success") {
-    throw new Error(`极验首次 get.php 状态异常: ${loadData.status}`);
+    throw new Error(
+      `极验首次 get.php 状态异常: ${loadData.status} | resp=${describeResp(loadData)}`,
+    );
   }
   let s = loadData.data?.s ?? loadData.s ?? "";
   if (!s) throw new Error("极验首次 get.php 未返回 s");
@@ -345,7 +363,9 @@ export async function solveGeetestV3(
   });
   const ajax1Data = parsePayload(ajax1Resp.data);
   if (ajax1Data.status && ajax1Data.status !== "success") {
-    throw new Error(`极验 ajax step1 状态异常: ${ajax1Data.status}`);
+    throw new Error(
+      `极验 ajax step1 状态异常: ${ajax1Data.status} | resp=${describeResp(ajax1Data)}`,
+    );
   }
 
   // ---- 第二次 get.php (is_next=slide3)：取缺口图 + 新 gt/challenge/s ----
@@ -370,7 +390,9 @@ export async function solveGeetestV3(
   });
   const slideData = parsePayload(slideResp.data);
   if (slideData.status && slideData.status !== "success") {
-    throw new Error(`极验 slide get.php 状态异常: ${slideData.status}`);
+    throw new Error(
+      `极验 slide get.php 状态异常: ${slideData.status} | resp=${describeResp(slideData)}`,
+    );
   }
   // 出图响应为顶层平铺（非 data 子层）：bg/fullbg/slice/challenge/s 均优先取顶层。
   const sd = slideData.data ?? {};
@@ -430,10 +452,15 @@ export async function solveGeetestV3(
   });
   const verifyResult = parsePayload(verifyData2.data);
   if (verifyResult.status && verifyResult.status !== "success") {
-    throw new Error(`极验校验状态非 success: ${verifyResult.status}`);
+    throw new Error(
+      `极验校验状态非 success: ${verifyResult.status} | resp=${describeResp(verifyResult)}`,
+    );
   }
   const validate = verifyResult.data?.validate ?? "";
-  if (!validate) throw new Error("极验 ajax.php 未返回 validate");
+  if (!validate)
+    throw new Error(
+      `极验 ajax.php 未返回 validate | resp=${describeResp(verifyResult)}`,
+    );
   const seccode = `${validate}|jordan`;
 
   return { challenge: newChallenge, validate, seccode };
