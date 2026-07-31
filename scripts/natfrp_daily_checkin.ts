@@ -1,7 +1,7 @@
 // @name NatFrp 每日签到与流量查询
 // @description NatFrp（樱花 Frp）每日自动签到并查询账号流量与会员信息
-// @cron 0 0~59 8 * * *
-// cron "0 0~59 8 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
+// @cron 0 12 8 * * *
+// cron "0 12 8 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
 // name: "NatFrp 每日签到与流量查询"
 
 /**
@@ -20,7 +20,7 @@
  *    - 纯 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
  *    - 极验 3 滑块通过 pngjs 缺口识别 + Node vm 执行 RC4/RSA 加密 JS 离线解算，
  *      完整复刻官方 api.geetest.com 的两次 get.php + ajax.php 链路拿真实 validate。
- *    - 定时规则会在每天 08:00–08:59 随机选定一个分钟；任务启动后再随机延迟 1–30 秒。
+ *    - 每天 08:12 触发；任务启动后随机延迟 1–30 秒。
  * ===========================================================================
  */
 
