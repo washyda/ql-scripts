@@ -1,7 +1,8 @@
 // @name NatFrp 每日签到与流量查询
 // @description NatFrp（樱花 Frp）每日自动签到并查询账号流量与会员信息
-// @cron 0 15 8 * * *
-// cron "0 15 8 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
+// @cron 0 0 9 * * *
+// cron "0 0 9 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
+// name: "NatFrp 每日签到与流量查询"
 
 /**
  * ==================== NatFrp 签到与流量查询脚本使用说明 ====================
@@ -26,7 +27,7 @@ import axios, { type AxiosRequestConfig } from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
 import { solveGeetestV3Slider } from "../src/core/captcha/geetest_v3";
 import { request, requestWithResponse } from "../src/core/http";
-import { defineTask, runTask } from "../src/core/task";
+import { defineTask, randomDelay, runTask, sleep } from "../src/core/task";
 import { formatTime } from "../src/core/time";
 
 export interface NatFrpV4UserInfo {
@@ -296,8 +297,12 @@ export async function executeCheckinV4(
 }
 
 export const natfrpCheckinTask = defineTask({
-  name: "NatFrp 每日签到与流量查询",
   async run({ logger }) {
+    const startupDelay = randomDelay(5 * 60_000);
+    if (startupDelay > 0) {
+      logger.info(`随机延迟 ${Math.ceil(startupDelay / 1000)} 秒后开始签到。`);
+      await sleep(startupDelay);
+    }
     const tokenEnv = optionalEnv("NATFRP_TOKEN");
     const cookieEnv = optionalEnv("NATFRP_COOKIE");
     const mainEnv = cookieEnv || tokenEnv;
@@ -463,6 +468,7 @@ export const natfrpCheckinTask = defineTask({
       }
     }
   },
+  name: "NatFrp 每日签到与流量查询",
 });
 
 if (require.main === module) {

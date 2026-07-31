@@ -1,7 +1,8 @@
 // @name 云·原神自动签到与时长查询
 // @description 米哈游云·原神账号自动登录、领取每日签到奖励并查询免费时长
-// @cron 0 22 8 * * *
-// cron "0 22 8 * * *" script-path=scripts/cloudgame_genshin_checkin.ts,tag=ql-scripts
+// @cron 0 0 9 * * *
+// cron "0 0 9 * * *" script-path=scripts/cloudgame_genshin_checkin.ts,tag=ql-scripts
+// name: "云·原神自动签到与时长查询"
 
 /**
  * ==================== 云·原神签到与时长查询使用说明 ====================
@@ -23,7 +24,7 @@
  * ===========================================================================
  */
 
-import { defineTask, runTask } from "../src/core/task";
+import { defineTask, randomDelay, runTask, sleep } from "../src/core/task";
 import { requiredEnv } from "../src/core/env";
 import { formatTime } from "../src/core/time";
 import {
@@ -113,8 +114,12 @@ async function claimCheckinRewards(
 }
 
 export const cloudgameCheckinTask = defineTask({
-  name: "云·原神自动签到与时长查询",
   async run({ logger }) {
+    const startupDelay = randomDelay(5 * 60_000);
+    if (startupDelay > 0) {
+      logger.info(`随机延迟 ${Math.ceil(startupDelay / 1000)} 秒后开始签到。`);
+      await sleep(startupDelay);
+    }
     logger.info(`${formatTime()} 读取云·原神账号配置`);
 
     const accounts = splitPairs(requiredEnv("YS_CG_ACCOUNT"));
@@ -186,6 +191,7 @@ export const cloudgameCheckinTask = defineTask({
       }
     }
   },
+  name: "云·原神自动签到与时长查询",
 });
 
 if (require.main === module) {

@@ -17,5 +17,12 @@ test("every task starts with QingLong line-comment metadata", () => {
     assert.match(header, /^\/\/ @description\s+\S.+$/mu, filename);
     assert.match(header, /^\/\/ @cron\s+\S.+$/mu, filename);
     assert.match(header, /script-path=scripts\/[a-z0-9_]+\.ts/u, filename);
+
+    const source = readFileSync(join(scriptsDirectory, filename), "utf8");
+    assert.match(
+      source,
+      /^\/\/ name:\s*"[^"]+"\s*$/mu,
+      `${filename} 缺少无尾逗号的名称兼容行`,
+    );
   }
 });
