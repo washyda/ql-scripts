@@ -43,6 +43,76 @@ export interface SessionContext {
   comboTokenRaw: string;
 }
 
+/** 已从云·原神客户端请求中获取的完整 x-rpc-combo_token 会话。 */
+export interface DirectTokenSessionContext {
+  mode: "direct-token";
+  comboToken: string;
+  deviceId: string;
+  clientType: string;
+  sysVersion: string;
+  deviceName: string;
+  deviceModel: string;
+  appVersion: string;
+}
+
+export type CloudgameSessionContext =
+  SessionContext | DirectTokenSessionContext;
+
+export interface DirectTokenSessionOptions {
+  comboToken: string;
+  deviceId: string;
+  clientType?: string;
+  sysVersion?: string;
+  deviceName?: string;
+  deviceModel?: string;
+  appVersion?: string;
+}
+
+function isDirectTokenSession(
+  context: CloudgameSessionContext,
+): context is DirectTokenSessionContext {
+  return "mode" in context && context.mode === "direct-token";
+}
+
+/** 构造与云·原神客户端抓包字段对应的直连 Token 会话。 */
+export function createDirectTokenSession(
+  options: DirectTokenSessionOptions,
+): DirectTokenSessionContext {
+  return {
+    mode: "direct-token",
+    comboToken: options.comboToken,
+    deviceId: options.deviceId,
+    clientType: options.clientType || "5",
+    sysVersion: options.sysVersion || "14.0",
+    deviceName: options.deviceName || "Unknown",
+    deviceModel: options.deviceModel || "Unknown",
+    appVersion: options.appVersion || "5.0.0",
+  };
+}
+
+/** 生成与 MHYY Python 项目相同字段语义的云游戏请求头。 */
+export function buildDirectTokenHeaders(
+  ctx: DirectTokenSessionContext,
+): ScalarHeaders {
+  return {
+    ...baseHeaders(),
+    Origin: "https://ys.mihoyo.com",
+    Referer: "https://ys.mihoyo.com/",
+    "x-rpc-combo_token": ctx.comboToken,
+    "x-rpc-client_type": ctx.clientType,
+    "x-rpc-app_version": ctx.appVersion,
+    "x-rpc-sys_version": ctx.sysVersion,
+    "x-rpc-channel": "cyydmihoyo",
+    "x-rpc-device_id": ctx.deviceId,
+    "x-rpc-device_name": ctx.deviceName,
+    "x-rpc-device_model": ctx.deviceModel,
+    "x-rpc-vendor_id": "1",
+    "x-rpc-cg_game_biz": "hk4e_cn",
+    "x-rpc-op_biz": "clgm_cn",
+    "x-rpc-language": "zh-cn",
+  };
+}
+
 export interface WalletInfoLike {
   data?: {
     free_time?: { free_time?: string };
@@ -275,14 +345,14 @@ export class MiHoYoApiClient {
   }
 
   /** 查询钱包（免费时长 / 畅玩卡 / 原点）。 */
-  async getWallet(ctx: SessionContext): Promise<WalletInfoLike> {
+  async getWallet(ctx: CloudgameSessionContext): Promise<WalletInfoLike> {
     const headers = this.cloudgameHeaders(ctx);
     return this.session.get(URLS.wallet, headers);
   }
 
   /** 列出未读签到弹窗奖励。 */
   async listNotifications(
-    ctx: SessionContext,
+    ctx: CloudgameSessionContext,
   ): Promise<MiHoYoResponse<{ data?: { list?: Array<{ id?: string }> } }>> {
     const headers = this.cloudgameHeaders(ctx);
     return this.session.get<{ data?: { list?: Array<{ id?: string }> } }>(
@@ -293,7 +363,7 @@ export class MiHoYoApiClient {
 
   /** 确认（领取）指定签到奖励。 */
   async ackNotification(
-    ctx: SessionContext,
+    ctx: CloudgameSessionContext,
     rewardId: string,
   ): Promise<MiHoYoResponse<unknown>> {
     const headers = this.cloudgameHeaders(ctx);
@@ -304,7 +374,11 @@ export class MiHoYoApiClient {
     );
   }
 
-  private cloudgameHeaders(ctx: SessionContext): ScalarHeaders {
+  private cloudgameHeaders(ctx: CloudgameSessionContext): ScalarHeaders {
+    if (isDirectTokenSession(ctx)) {
+      return buildDirectTokenHeaders(ctx);
+    }
+
     const combo = buildComboToken(ctx.openId, ctx.comboTokenRaw);
     return {
       ...baseHeaders(),

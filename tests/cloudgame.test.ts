@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { customBase64FromHex } from "../src/core/mihoyo/crypto";
+import {
+  buildDirectTokenHeaders,
+  createDirectTokenSession,
+} from "../src/core/mihoyo/client";
 import { generateW, proofOfWork } from "../src/core/captcha/geetest_v4";
 import { estimateOffsetFromBytes } from "../src/core/captcha/offset_estimator";
 import { PNG } from "pngjs";
@@ -18,6 +22,25 @@ test("customBase64FromHex encodes 3 hex chars to 2 base64 chars", () => {
 test("customBase64FromHex length is multiple of 4", () => {
   const out = customBase64FromHex("abcdef0123");
   assert.equal(out.length % 4, 0);
+});
+
+test("direct token session keeps captured credentials and uses MHYY defaults", () => {
+  const session = createDirectTokenSession({
+    comboToken: "redacted-token",
+    deviceId: "captured-device-id",
+  });
+
+  assert.equal(session.mode, "direct-token");
+  assert.equal(session.comboToken, "redacted-token");
+  assert.equal(session.deviceId, "captured-device-id");
+  assert.equal(session.clientType, "5");
+  assert.equal(session.sysVersion, "14.0");
+  assert.equal(session.appVersion, "5.0.0");
+
+  const headers = buildDirectTokenHeaders(session);
+  assert.equal(headers["x-rpc-combo_token"], "redacted-token");
+  assert.equal(headers["x-rpc-device_id"], "captured-device-id");
+  assert.equal(headers["x-rpc-channel"], "cyydmihoyo");
 });
 
 test("proofOfWork bits=0 returns deterministic structure", () => {

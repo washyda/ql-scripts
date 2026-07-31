@@ -13,10 +13,14 @@
  *    - 查询免费时长、畅玩卡状态、原点余额；领取每日登录奖励。
  *
  * 2. 环境变量配置：
- *    - `YS_CG_ACCOUNT`: 云·原神账号（手机号或邮箱），多账号用换行或 `&` 分隔。
- *    - `YS_CG_PASSWORD`: 对应账号密码，与账号按顺序一一对应，同样用换行或 `&` 分隔。
- *    - 账号数量必须与密码数量一致；否则按缺省处理并告警。
- *    - 账号内如包含邮箱的 `@` 不会被当作分隔符；仅换行与 `&` 分隔多个账号。
+ *    - 推荐 Token 模式（与 MHYY Python 项目相同，避免账号密码登录触发极验）：
+ *      - `YS_CG_TOKEN`: 抓包得到的完整 `x-rpc-combo_token` 值。
+ *      - `YS_CG_DEVICE_ID`: 与 Token 同次请求中的 `x-rpc-device_id`；与 Token 按顺序对应。
+ *      - 可选：`YS_CG_CLIENT_TYPE`、`YS_CG_SYS_VERSION`、`YS_CG_DEVICE_NAME`、
+ *        `YS_CG_DEVICE_MODEL`、`YS_CG_APP_VERSION`，均应使用同次抓包值。
+ *    - 兼容密码模式：`YS_CG_ACCOUNT` 与 `YS_CG_PASSWORD` 按顺序一一对应。
+ *      若服务端下发 `captcha_type=icon`，请改用上述 Token 模式，脚本不会尝试绕过图标验证。
+ *    - 多账号均用换行或 `&` 分隔；账号内的邮箱 `@` 不会被当作分隔符。
  *
  * 3. 运行环境：
  *    - 极验 v4 缺口识别经 pngjs 解码 PNG + Scharr/ZNCC 模板匹配实现，零 native 依赖、零无头浏览器。
@@ -31,12 +35,13 @@ import {
   runTask,
   sleep,
 } from "../src/core/task";
-import { requiredEnv } from "../src/core/env";
+import { optionalEnv, requiredEnv } from "../src/core/env";
 import { formatTime } from "../src/core/time";
 import {
   MiHoYoApiClient,
+  createDirectTokenSession,
+  type CloudgameSessionContext,
   loginWithPassword,
-  type SessionContext,
   type WalletInfoLike,
 } from "../src/core/mihoyo/client";
 import { HttpSession } from "../src/core/mihoyo/http";
@@ -81,7 +86,7 @@ function formatMinutes(stat: WalletStat): string {
 /** 领取每日签到奖励并回报本次新增免费时长。 */
 async function claimCheckinRewards(
   client: MiHoYoApiClient,
-  ctx: SessionContext,
+  ctx: CloudgameSessionContext,
   beforeMinutes: number,
   info: (m: string) => void,
   warn: (m: string) => void,
@@ -119,12 +124,96 @@ async function claimCheckinRewards(
   }
 }
 
+function valueAt(
+  values: readonly string[],
+  index: number,
+  fallback: string,
+): string {
+  return values[index] || (values.length === 1 ? values[0]! : fallback);
+}
+
+async function queryAndClaim(
+  client: MiHoYoApiClient,
+  ctx: CloudgameSessionContext,
+  logger: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+    error: (message: string) => void;
+  },
+): Promise<void> {
+  let wallet: WalletInfoLike;
+  try {
+    wallet = await client.getWallet(ctx);
+  } catch (error) {
+    logger.error(
+      `查询钱包失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  const before = parseWallet(wallet);
+  logger.info(`当前钱包：${formatMinutes(before)}`);
+
+  try {
+    await claimCheckinRewards(
+      client,
+      ctx,
+      before.freeMinutes,
+      logger.info,
+      logger.warn,
+    );
+  } catch (error) {
+    logger.error(
+      `领取签到奖励失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 export const cloudgameCheckinTask = defineTask({
   async run({ logger }) {
     const startupDelay = randomDelayBetween(1_000, 30_000);
     logger.info(`随机延迟 ${(startupDelay / 1000).toFixed(1)} 秒后开始签到。`);
     await sleep(startupDelay);
     logger.info(`${formatTime()} 读取云·原神账号配置`);
+
+    const tokenValues = splitPairs(optionalEnv("YS_CG_TOKEN"));
+    const deviceIds = splitPairs(optionalEnv("YS_CG_DEVICE_ID"));
+    const clientTypes = splitPairs(optionalEnv("YS_CG_CLIENT_TYPE"));
+    const sysVersions = splitPairs(optionalEnv("YS_CG_SYS_VERSION"));
+    const deviceNames = splitPairs(optionalEnv("YS_CG_DEVICE_NAME"));
+    const deviceModels = splitPairs(optionalEnv("YS_CG_DEVICE_MODEL"));
+    const appVersions = splitPairs(optionalEnv("YS_CG_APP_VERSION"));
+
+    if (tokenValues.length > 0) {
+      if (deviceIds.length === 0) {
+        throw new Error("使用 YS_CG_TOKEN 时必须同时配置 YS_CG_DEVICE_ID");
+      }
+      if (deviceIds.length !== 1 && deviceIds.length !== tokenValues.length) {
+        throw new Error(
+          "YS_CG_DEVICE_ID 数量必须为 1 或与 YS_CG_TOKEN 数量一致",
+        );
+      }
+
+      logger.info(`读取到 ${tokenValues.length} 个云·原神 Token 会话。`);
+      for (const [index, token] of tokenValues.entries()) {
+        logger.info(
+          `---------------- Token 会话 [${index + 1}/${tokenValues.length}] ----------------`,
+        );
+        const session = new HttpSession();
+        const client = new MiHoYoApiClient(session);
+        const ctx = createDirectTokenSession({
+          comboToken: token,
+          deviceId: valueAt(deviceIds, index, ""),
+          clientType: valueAt(clientTypes, index, "5"),
+          sysVersion: valueAt(sysVersions, index, "14.0"),
+          deviceName: valueAt(deviceNames, index, "Unknown"),
+          deviceModel: valueAt(deviceModels, index, "Unknown"),
+          appVersion: valueAt(appVersions, index, "5.0.0"),
+        });
+        logger.info("使用已配置的 Token 会话查询签到状态。");
+        await queryAndClaim(client, ctx, logger);
+      }
+      return;
+    }
 
     const accounts = splitPairs(requiredEnv("YS_CG_ACCOUNT"));
     const passwords = splitPairs(requiredEnv("YS_CG_PASSWORD"));
@@ -153,7 +242,7 @@ export const cloudgameCheckinTask = defineTask({
         error: (m: string) => logger.error(m),
       };
 
-      let ctx: SessionContext | null;
+      let ctx: CloudgameSessionContext | null;
       try {
         ctx = await loginWithPassword(session, client, account, password, log);
       } catch (error) {
@@ -168,31 +257,7 @@ export const cloudgameCheckinTask = defineTask({
       }
       logger.info("云·原神登录成功。");
 
-      let wallet: WalletInfoLike;
-      try {
-        wallet = await client.getWallet(ctx);
-      } catch (error) {
-        logger.error(
-          `查询钱包失败：${error instanceof Error ? error.message : String(error)}`,
-        );
-        continue;
-      }
-      const before = parseWallet(wallet);
-      logger.info(`当前钱包：${formatMinutes(before)}`);
-
-      try {
-        await claimCheckinRewards(
-          client,
-          ctx,
-          before.freeMinutes,
-          logger.info.bind(logger),
-          logger.warn.bind(logger),
-        );
-      } catch (error) {
-        logger.error(
-          `领取签到奖励失败：${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+      await queryAndClaim(client, ctx, logger);
     }
   },
   name: "云·原神自动签到与时长查询",
