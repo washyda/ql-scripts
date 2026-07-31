@@ -9,6 +9,13 @@ export const http = axios.create({
 
 /** 发起请求并返回响应数据，统一复用仓库级超时和 User-Agent。 */
 export async function request<T>(config: AxiosRequestConfig): Promise<T> {
-  const response: AxiosResponse<T> = await http.request<T>(config);
+  const response = await requestWithResponse<T>(config);
   return response.data;
+}
+
+/** 发起请求并保留状态码、响应头等元信息。 */
+export async function requestWithResponse<T>(
+  config: AxiosRequestConfig,
+): Promise<AxiosResponse<T>> {
+  return http.request<T>(config);
 }

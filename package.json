@@ -9,7 +9,7 @@
   "scripts": {
     "check": "npm run format:check && npm run typecheck && npm test",
     "dev:hello": "tsx scripts/hello_world.ts",
-    "dev:natfrp": "tsx scripts/natfrp_checkin.ts",
+    "dev:natfrp": "tsx scripts/natfrp_daily_checkin.ts",
     "dev:cloudgame": "tsx scripts/cloudgame_genshin_checkin.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

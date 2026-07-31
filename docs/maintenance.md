@@ -6,6 +6,7 @@
 - 不提交 JavaScript 构建产物、本地日志、缓存、密钥或真实账号数据。
 - 删除或重命名任务文件属于破坏性变更，应提供订阅和定时任务迁移说明。
 - 修改任务路径后同步修改脚本头的 `script-path` 和订阅文档。
+- NatFrp 任务当前路径为 `scripts/natfrp_daily_checkin.ts`；旧的 `natfrp_checkin.ts` 不再维护。
 
 ## 检查清单
 

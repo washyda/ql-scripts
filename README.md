@@ -51,6 +51,7 @@ task <订阅仓库目录>/scripts/hello_world.ts
 - `axios`：HTTP 请求
 - `moment`：时间处理
 - `pngjs`：解码极验滑块缺口 PNG（云·原神、NatFrp 签到）
+- `@jsquash/jpeg`：解码极验 3 滑块背景 JPEG（NatFrp 签到）
 
 在青龙「依赖管理」中新建 **NodeJS** 依赖并安装：
 
@@ -58,9 +59,10 @@ task <订阅仓库目录>/scripts/hello_world.ts
 axios
 moment
 pngjs
+@jsquash/jpeg
 ```
 
-Hello World 本身不调用这两个包，因此即使还未安装也可以先运行验证。使用共享 HTTP 或时间工具的正式任务需要先安装对应依赖。
+Hello World 本身不调用这些包，因此即使还未安装也可以先运行验证。使用共享 HTTP、时间或验证码工具的正式任务需要先安装对应依赖。
 
 ## 环境变量
 
@@ -72,7 +74,7 @@ Hello World 没有必填变量。可在「环境变量」中添加：
 | `NATFRP_TOKEN`  | `your_api_token`     | 查询时必填 | NatFrp 访问密钥 / Token，多账号使用 `&` 或换行分隔       |
 | `NATFRP_COOKIE` | `PHPSESSID=...; ...` | 签到时必填 | 当前官网登录会话的完整 Cookie，多账号使用 `&` 或换行分隔 |
 
-NatFrp 的账号查询支持 Token，但签到接口只支持 SESSION。两个变量可以同时配置：脚本查询时可携带 Token，签到时只发送 Cookie，不会把 `Authorization` 头带入签到请求。脚本会先通过官网 CGI 检查验证要求；若账号需要极验交互，青龙无交互任务不会伪造验证码，而会提示前往官网手动完成签到。
+NatFrp 的账号查询支持 Token，但签到接口只支持 SESSION。两个变量可以同时配置：脚本查询时可携带 Token，签到时只发送 Cookie，不会把 `Authorization` 头带入签到请求。`scripts/natfrp_daily_checkin.ts` 会先通过官网 CGI 检查验证要求，并在需要时使用共享的极验 3 滑块工具完成校验。
 
 运行日志示例：
 

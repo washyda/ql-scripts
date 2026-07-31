@@ -8,7 +8,7 @@ import {
   containsPhpSession,
   formatTraffic,
   maskUsername,
-} from "../scripts/natfrp_checkin";
+} from "../scripts/natfrp_daily_checkin";
 
 test("formatTraffic handles bytes and GiB correctly", () => {
   assert.equal(formatTraffic(undefined), "未知");

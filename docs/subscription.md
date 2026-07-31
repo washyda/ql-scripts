@@ -43,3 +43,7 @@ task <订阅仓库目录>/scripts/hello_world.ts
 ## 验收
 
 先在「依赖管理」确认任务所需 NodeJS 包已经安装，再运行任务。Hello World 无第三方包调用，可直接用于检查 TS 执行能力。
+
+## NatFrp 任务迁移
+
+NatFrp 日常签到任务已由 `scripts/natfrp_checkin.ts` 更名为 `scripts/natfrp_daily_checkin.ts`。更新订阅后，请删除旧任务并按新文件路径重新创建或启用任务；环境变量 `NATFRP_TOKEN`、`NATFRP_COOKIE` 无需变更。

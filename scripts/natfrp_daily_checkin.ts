@@ -1,22 +1,21 @@
 /**
- * @name NatFrp 自动签到与流量查询
- * @description NatFrp (樱花Frp) 账号自动签到并获取流量与账号配置信息
+ * @name NatFrp 每日签到与流量查询
+ * @description NatFrp（樱花 Frp）每日自动签到并查询账号流量与会员信息
  * @cron 0 15 8 * * *
- * cron "0 15 8 * * *" script-path=scripts/natfrp_checkin.ts,tag=ql-scripts
+ * cron "0 15 8 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
  */
 
 /**
  * ==================== NatFrp 签到与流量查询脚本使用说明 ====================
  * 1. 任务用途：
  *    - 基于官方 NatFrp API v4 自动查询账号剩余流量、已用流量及会员组配置。
- *    - 自动提交每日签到请求；若服务端要求交互式极验，脚本会明确提示。
+ *    - 自动提交每日签到请求；服务端要求极验 3 滑块时自动完成校验后提交。
  *
  * 2. 环境变量配置：
  *    - `NATFRP_TOKEN`: NatFrp 访问密钥 / Token (支持获取流量与账号配置)。
  *    - `NATFRP_COOKIE`: NatFrp 网页端 Session Cookie (用于检查并尝试签到)。
  *    - 查询信息可使用 Token 或 Cookie；自动签到必须配置 Cookie。
  *    - 两者可以同时配置，多账号使用 `&` 或换行分隔并按顺序对应。
- *    - 若官网要求极验交互，青龙无交互任务会跳过签到并提示前往官网完成。
  *
  * 3. 运行环境：
  *    - 纯 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
@@ -27,8 +26,8 @@
 
 import axios, { type AxiosRequestConfig } from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
-import { solveGeetestV3 } from "../src/core/captcha/geetest_v3";
-import { request } from "../src/core/http";
+import { solveGeetestV3Slider } from "../src/core/captcha/geetest_v3";
+import { request, requestWithResponse } from "../src/core/http";
 import { defineTask, runTask } from "../src/core/task";
 import { formatTime } from "../src/core/time";
 
@@ -252,15 +251,22 @@ export async function executeCheckinV4(
   needCaptcha?: boolean | undefined;
 }> {
   try {
-    const res = await request<
+    const response = await requestWithResponse<
       NatFrpApiResponse<{ gt?: string; challenge?: string }>
     >(buildNatFrpCheckinRequest(credential, captchaParams));
+    const res = response.data;
 
-    const msg = res.msg || res.message || "无返回信息";
+    const msg = res.msg || res.message || "签到请求已受理";
     const gt = res.data?.gt;
     const challenge = res.data?.challenge;
 
-    if (res.code === 200 || res.status === 200 || res.flag === true) {
+    if (
+      response.status >= 200 &&
+      response.status < 300 &&
+      (res.code === undefined || res.code === 200) &&
+      (res.status === undefined || res.status === 200) &&
+      res.flag !== false
+    ) {
       return { success: true, message: msg };
     }
 
@@ -292,7 +298,7 @@ export async function executeCheckinV4(
 }
 
 export const natfrpCheckinTask = defineTask({
-  name: "NatFrp 自动签到与流量查询",
+  name: "NatFrp 每日签到与流量查询",
   async run({ logger }) {
     const tokenEnv = optionalEnv("NATFRP_TOKEN");
     const cookieEnv = optionalEnv("NATFRP_COOKIE");
@@ -310,6 +316,7 @@ export const natfrpCheckinTask = defineTask({
 
     for (const [index, credential] of accounts.entries()) {
       const extraToken = extraTokens[index] || extraTokens[0];
+      let alreadySignedToday = false;
       logger.info(
         `---------------- 账号 [${index + 1}/${accounts.length}] ----------------`,
       );
@@ -331,6 +338,7 @@ export const natfrpCheckinTask = defineTask({
         }
 
         if (userInfoBefore.sign) {
+          alreadySignedToday = Boolean(userInfoBefore.sign.signed);
           logger.info(
             `签到状态: ${userInfoBefore.sign.signed ? "今日已签到" : "今日未签到"} (连续签到 ${userInfoBefore.sign.days || 0} 天)`,
           );
@@ -343,6 +351,10 @@ export const natfrpCheckinTask = defineTask({
       }
 
       // 2. 执行签到
+      if (alreadySignedToday) {
+        logger.info("今日已完成签到，跳过极验与重复提交。");
+        continue;
+      }
       if (!cookieEnv) {
         logger.warn(
           "未配置 NATFRP_COOKIE，Token 只能查询账号信息，已跳过自动签到。",
@@ -374,7 +386,11 @@ export const natfrpCheckinTask = defineTask({
         }
 
         logger.info(`获取到极验参数 gt=${gt}，开始完整滑块协议链路解算...`);
-        const captchaSolved = await solveGeetestV3(gt, requirement.challenge);
+        const captchaSolved = await solveGeetestV3Slider(
+          gt,
+          requirement.challenge,
+          "https://www.natfrp.com/user/",
+        );
         logger.info(
           `解算完成！极验下发的真实校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
         );
@@ -400,7 +416,11 @@ export const natfrpCheckinTask = defineTask({
           logger.warn("二次补尝缺少极验 challenge，无法解算，跳过");
           continue;
         }
-        const captchaSolved = await solveGeetestV3(gt, checkinResult.challenge);
+        const captchaSolved = await solveGeetestV3Slider(
+          gt,
+          checkinResult.challenge,
+          "https://www.natfrp.com/user/",
+        );
 
         checkinResult = await executeCheckinV4(credential, {
           challenge: captchaSolved.challenge,

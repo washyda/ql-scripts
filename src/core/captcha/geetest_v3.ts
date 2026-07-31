@@ -22,8 +22,8 @@ import {
   type TrajectoryCipherParameters,
 } from "./v3_js";
 
-// The legacy V3 fullpage bootstrap used by NatFrp is served from apiv6.  The
-// slide phase itself is redirected to api.geevisit.com by the response.
+// Legacy Geetest V3 fullpage bootstrap. The slide host is supplied by the
+// service response and is therefore independent from the calling script.
 const API_SERVER = "apiv6.geetest.com";
 const STATIC_SERVER = "static.geetest.com";
 const BROWSER_UA =
@@ -481,8 +481,8 @@ function buildAjaxW(
   return js.aesEncrypt(JSON.stringify(u), aeskey);
 }
 
-export interface V3SolveResult {
-  /** 最终用于提交 NatFrp 的 challenge（第二次 get.php 返回的更新值） */
+export interface GeetestV3SliderResult {
+  /** 最终用于提交业务站点的 challenge（第二次 get.php 返回的更新值） */
   challenge: string;
   /** 极验 ajax.php step2 返回的 validate */
   validate: string;
@@ -491,17 +491,17 @@ export interface V3SolveResult {
 }
 
 /**
- * 完整解算极验 3 滑块，返回可直接回传 NatFrp sign 的三件套。
+ * 完整解算极验 3 滑块，返回可直接回传业务站点的三件套。
  *
- * @param gt NatFrp 下发的极验 gt。
- * @param challenge NatFrp 下发的初始 challenge。
- * @param referer 站点来源页（NatFrp 用户中心），用于极验请求头与脚本分发。
+ * @param gt 业务站点下发的极验 gt。
+ * @param challenge 业务站点下发的初始 challenge。
+ * @param referer 业务站点的来源页，用于极验请求头与脚本分发。
  */
-export async function solveGeetestV3(
+export async function solveGeetestV3Slider(
   gt: string,
   challenge: string,
-  referer = "https://www.natfrp.com/user/",
-): Promise<V3SolveResult> {
+  referer = "https://www.geetest.com/",
+): Promise<GeetestV3SliderResult> {
   const cookieJar = new GeetestCookieJar();
   const client = createClient(referer, cookieJar);
   const baseParams = { gt, challenge, lang: "zh-cn" };
@@ -680,8 +680,7 @@ export async function solveGeetestV3(
       `极验校验状态非 success: ${verifyResult.status} | resp=${describeResp(verifyResult)}`,
     );
   }
-  // V3 ajax success responses may be JSONP objects with validate at the top
-  // level (NatFrp), while some deployments nest it under data.
+  // V3 ajax success responses may put validate at the top level or under data.
   const validate = verifyResult.validate ?? verifyResult.data?.validate ?? "";
   if (!validate)
     throw new Error(
@@ -691,3 +690,6 @@ export async function solveGeetestV3(
 
   return { challenge: slideChallenge, validate, seccode };
 }
+
+/** @deprecated 请使用语义更明确的 solveGeetestV3Slider。 */
+export const solveGeetestV3 = solveGeetestV3Slider;

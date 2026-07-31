@@ -9,7 +9,7 @@
 | 分类       | 内容                                 | 安装位置                                                  |
 | ---------- | ------------------------------------ | --------------------------------------------------------- |
 | 基础运行时 | Node.js、青龙的 TypeScript 执行器    | 青龙基础环境提供                                          |
-| 运行依赖   | axios、moment、pngjs                 | 青龙「依赖管理」的 NodeJS 类型，同时记录于 `dependencies` |
+| 运行依赖   | axios、moment、pngjs、@jsquash/jpeg  | 青龙「依赖管理」的 NodeJS 类型，同时记录于 `dependencies` |
 | 开发依赖   | TypeScript、tsx、Prettier、Node 类型 | 本地或 CI 通过 `npm install` 安装                         |
 
 青龙中需要建立以下 NodeJS 依赖：
@@ -18,15 +18,17 @@
 axios
 moment
 pngjs
+@jsquash/jpeg
 ```
 
-> `pngjs` 用于云·原神与 NatFrp 签到脚本解码极验滑块缺口 PNG 图片（纯 JavaScript 实现，无需 native 编译）。
+> `pngjs` 用于云·原神与 NatFrp 签到脚本解码极验滑块缺口 PNG 图片；`@jsquash/jpeg` 用于极验 3 背景 JPEG 解码。两者均为纯 JavaScript/WASM 方案，无需 native 编译。
 
 ## 共享封装
 
 - `src/core/http.ts`：axios 实例、15 秒默认超时和统一 User-Agent。
 - `src/core/time.ts`：moment 和统一时间格式。
 - `src/core/env.ts`：必填、可选变量及多账号拆分。
+- `src/core/captcha/geetest_v3.ts`：可供任务调用的极验 3 滑块解算工具。
 
 ## 新增依赖规则
 
