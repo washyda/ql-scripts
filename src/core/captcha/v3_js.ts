@@ -28,6 +28,130 @@ type JsBindings = {
   get_a: (s: string) => string;
 };
 
+export type GeetestTrajectoryPoint = readonly [x: number, y: number, time: number];
+export type TrajectoryCipherParameters = readonly number[];
+
+const TRAJECTORY_CHARSET =
+  "()*,-./0123456789:?@ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqr";
+const TRAJECTORY_DIRECTION_CODES = "stuvwxyz~";
+const TRAJECTORY_DIRECTION_PATTERNS: readonly (readonly [number, number])[] = [
+  [1, 0],
+  [2, 0],
+  [1, -1],
+  [1, 1],
+  [0, 1],
+  [0, -1],
+  [3, 0],
+  [2, -1],
+  [2, 1],
+];
+
+function encodeTrajectoryNumber(value: number): string {
+  const absoluteValue = Math.abs(value);
+  const highDigit = Math.floor(absoluteValue / TRAJECTORY_CHARSET.length);
+  let encoded = value < 0 ? "!" : "";
+  if (highDigit > 0 && highDigit < TRAJECTORY_CHARSET.length) {
+    encoded += `$${TRAJECTORY_CHARSET[highDigit]}`;
+  }
+  return encoded + TRAJECTORY_CHARSET[absoluteValue % TRAJECTORY_CHARSET.length];
+}
+
+function getTrajectoryDirectionCode(deltaX: number, deltaY: number): string | null {
+  const directionIndex = TRAJECTORY_DIRECTION_PATTERNS.findIndex(
+    ([patternX, patternY]) => patternX === deltaX && patternY === deltaY,
+  );
+  return directionIndex < 0
+    ? null
+    : TRAJECTORY_DIRECTION_CODES[directionIndex]!;
+}
+
+/** Encode cumulative [x, y, time] points into the slide `aa` preimage format. */
+export function encodeTrajectory(
+  trajectory: readonly GeetestTrajectoryPoint[],
+): string {
+  const compressedPoints: Array<[deltaX: number, deltaY: number, deltaTime: number]> = [];
+  let accumulatedStationaryTime = 0;
+
+  for (let pointIndex = 0; pointIndex + 1 < trajectory.length; pointIndex++) {
+    const currentPoint = trajectory[pointIndex]!;
+    const nextPoint = trajectory[pointIndex + 1]!;
+    const deltaX = nextPoint[0] - currentPoint[0];
+    const deltaY = nextPoint[1] - currentPoint[1];
+    const deltaTime = Math.abs(nextPoint[2] - currentPoint[2]);
+
+    if (deltaX === 0 && deltaY === 0 && deltaTime === 0) continue;
+    if (deltaX === 0 && deltaY === 0) {
+      accumulatedStationaryTime += deltaTime;
+      continue;
+    }
+
+    compressedPoints.push([
+      deltaX,
+      deltaY,
+      deltaTime + accumulatedStationaryTime,
+    ]);
+    accumulatedStationaryTime = 0;
+  }
+
+  if (accumulatedStationaryTime !== 0) {
+    compressedPoints.push([0, 0, accumulatedStationaryTime]);
+  }
+
+  const encodedX: string[] = [];
+  const encodedY: string[] = [];
+  const encodedTime: string[] = [];
+  for (const [deltaX, deltaY, deltaTime] of compressedPoints) {
+    const directionCode = getTrajectoryDirectionCode(deltaX, deltaY);
+    if (directionCode) {
+      encodedY.push(directionCode);
+    } else {
+      encodedX.push(encodeTrajectoryNumber(deltaX));
+      encodedY.push(encodeTrajectoryNumber(deltaY));
+    }
+    encodedTime.push(encodeTrajectoryNumber(deltaTime));
+  }
+
+  return `${encodedX.join("")}!!${encodedY.join("")}!!${encodedTime.join("")}`;
+}
+
+/** Apply the slide response c/s insertion transform to the encoded `aa` string. */
+export function encryptTrajectory(
+  encodedTrajectory: string,
+  trajectoryCipherParameters: TrajectoryCipherParameters,
+  slideSecurityCode: string,
+): string {
+  if (
+    encodedTrajectory.length === 0 ||
+    trajectoryCipherParameters.length < 5 ||
+    slideSecurityCode.length < 2
+  ) {
+    return encodedTrajectory;
+  }
+
+  const [quadraticCoefficient, linearCoefficient, constantCoefficient] = [
+    trajectoryCipherParameters[0]!,
+    trajectoryCipherParameters[2]!,
+    trajectoryCipherParameters[4]!,
+  ];
+  let encryptedTrajectory = encodedTrajectory;
+  for (let index = 0; index + 1 < slideSecurityCode.length; index += 2) {
+    const cipherByte = Number.parseInt(
+      slideSecurityCode.slice(index, index + 2),
+      16,
+    );
+    if (!Number.isFinite(cipherByte)) continue;
+    const insertionPosition =
+      (quadraticCoefficient * cipherByte * cipherByte +
+        linearCoefficient * cipherByte +
+        constantCoefficient) % encodedTrajectory.length;
+    encryptedTrajectory =
+      encryptedTrajectory.slice(0, insertionPosition) +
+      String.fromCharCode(cipherByte) +
+      encryptedTrajectory.slice(insertionPosition);
+  }
+  return encryptedTrajectory;
+}
+
 export class GeetestV3Js {
   private ctx: Context;
 

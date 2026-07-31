@@ -13,12 +13,88 @@
  */
 import axios, { type AxiosInstance } from "axios";
 import { calculateV3Offset } from "./geetest_v3_offset";
-import { getGeetestV3Js, type GeetestV3Js } from "./v3_js";
+import {
+  encodeTrajectory,
+  encryptTrajectory,
+  getGeetestV3Js,
+  type GeetestTrajectoryPoint,
+  type GeetestV3Js,
+  type TrajectoryCipherParameters,
+} from "./v3_js";
 
 const API_SERVER = "api.geetest.com";
 const STATIC_SERVER = "static.geetest.com";
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+interface BrowserPerformanceTiming {
+  navigationStart: number;
+  unloadEventStart: number;
+  unloadEventEnd: number;
+  redirectStart: number;
+  redirectEnd: number;
+  fetchStart: number;
+  domainLookupStart: number;
+  domainLookupEnd: number;
+  connectStart: number;
+  secureConnectionStart: number;
+  connectEnd: number;
+  requestStart: number;
+  responseStart: number;
+  responseEnd: number;
+  domLoading: number;
+  domInteractive: number;
+  domContentLoadedEventStart: number;
+  domContentLoadedEventEnd: number;
+  domComplete: number;
+  loadEventStart: number;
+  loadEventEnd: number;
+}
+
+function generatePerformanceTiming(baseTimestamp = Date.now()): BrowserPerformanceTiming {
+  const fetchStart = baseTimestamp + 1;
+  const domainLookupStart = fetchStart + 4;
+  const domainLookupEnd = domainLookupStart + 10;
+  const connectStart = domainLookupEnd;
+  const secureConnectionStart = connectStart + 38;
+  const connectEnd = connectStart + 92;
+  const requestStart = connectEnd + 3;
+  const responseStart = requestStart + 54;
+  const responseEnd = responseStart + 2;
+  const unloadEventStart = responseEnd + 2;
+  const unloadEventEnd = unloadEventStart + 3;
+  const domLoading = unloadEventEnd + 2;
+  const domInteractive = domLoading + 116;
+  const domContentLoadedEventStart = domInteractive;
+  const domContentLoadedEventEnd = domInteractive + 2;
+  const domComplete = domContentLoadedEventEnd;
+  const loadEventStart = domComplete;
+  const loadEventEnd = loadEventStart + 2;
+
+  return {
+    navigationStart: baseTimestamp,
+    unloadEventStart,
+    unloadEventEnd,
+    redirectStart: 0,
+    redirectEnd: 0,
+    fetchStart,
+    domainLookupStart,
+    domainLookupEnd,
+    connectStart,
+    secureConnectionStart,
+    connectEnd,
+    requestStart,
+    responseStart,
+    responseEnd,
+    domLoading,
+    domInteractive,
+    domContentLoadedEventStart,
+    domContentLoadedEventEnd,
+    domComplete,
+    loadEventStart,
+    loadEventEnd,
+  };
+}
 
 interface GeetestResponseData {
   status?: string;
@@ -96,54 +172,78 @@ function parsePayload(payload: unknown): GeetestResponseData {
 }
 
 /** 根据 offset 生成一条拟真滑动轨迹 [[x, y, t], ...]。 */
-function buildTrack(offset: number): number[][] {
-  const track: number[][] = [
+function buildTrack(offset: number): GeetestTrajectoryPoint[] {
+  const track: GeetestTrajectoryPoint[] = [
     [-32, -26, 0],
     [0, 0, 0],
   ];
   let x = 0;
   let t = 90;
-  // 起步加速、中段匀速、末段减速
+  // 起步加速、中段匀速、末段减速；y 加小幅抖动拟真（人手滑动非纯水平）
   const steps = Math.max(20, Math.round(offset * 1.5));
+  let y = 0;
   for (let i = 1; i <= steps; i++) {
     const progress = i / steps;
-    // ease-in-out 风格位移
     const ease =
       progress < 0.5
         ? 2 * progress * progress
         : 1 - Math.pow(-2 * progress + 2, 2) / 2;
     x = Math.round(offset * ease);
+    y += Math.round((Math.random() - 0.5) * 3);
     t += 8 + Math.round(Math.random() * 6);
-    track.push([x, 0, t]);
+    track.push([x, y, t]);
   }
   // 末尾停留若干点模拟松手
   for (let i = 0; i < 4; i++) {
     t += 60 + Math.round(Math.random() * 40);
-    track.push([offset, 0, t]);
+    track.push([offset, y, t]);
   }
   return track;
 }
 
-/** 构造 slide 提交的 w = encryptU(u, s) + getA(s)。 */
+/** 构造 slide 提交的 w = AES(JSON(slidePayload), sessionAesKey) + RSA(sessionAesKey)。
+ *  sessionAesKey 是 fullpage/ajax/slide 共用的会话级客户端密钥；slideSecurityCode
+ *  与 trajectoryCipherParameters 则来自 slide get.php，只用于 aa 轨迹二次加密。 */
 function buildSlideW(
-  gt: string,
-  challenge: string,
-  s: string,
-  offset: number,
-  track: number[][],
+  geetestId: string,
+  slideChallenge: string,
+  sessionAesKey: string,
+  slideOffset: number,
+  trajectory: readonly GeetestTrajectoryPoint[],
+  trajectoryCipherParameters: TrajectoryCipherParameters,
+  slideSecurityCode: string,
 ): string {
-  const js = getGeetestV3Js();
-  const passtime = track[track.length - 1]![2]!;
-  const u = {
+  const geetestJs = getGeetestV3Js();
+  const passtime = trajectory[trajectory.length - 1]![2]!;
+  const encodedTrajectory = encodeTrajectory(trajectory);
+  const encryptedTrajectory = encryptTrajectory(
+    encodedTrajectory,
+    trajectoryCipherParameters,
+    slideSecurityCode,
+  );
+  const performanceTiming = generatePerformanceTiming();
+  const slidePayload = {
     lang: "zh-cn",
-    userresponse: js.getUserResponse(offset - 1, challenge),
+    userresponse: geetestJs.getUserResponse(slideOffset, slideChallenge),
     passtime,
-    imgload: 150 + Math.round(Math.random() * 70),
-    a: js.mouseEncrypt(track),
-    ep: { v: "7.8.6", f: js.lmWn(gt + challenge) },
-    rp: js.lmWn(gt + challenge.slice(0, 32) + String(passtime)),
+    imgload: 50,
+    aa: encryptedTrajectory,
+    ep: {
+      v: "7.9.3",
+      ["$_BIT"]: false,
+      me: true,
+      tm: performanceTiming,
+      td: -1,
+    },
+    h9s9: "1816378497",
+    rp: geetestJs.lmWn(
+      geetestId + slideChallenge.slice(0, 32) + String(passtime),
+    ),
   };
-  return js.encryptU(u as unknown as Record<string, unknown>, s) + js.getA(s);
+  return (
+    geetestJs.aesEncrypt(JSON.stringify(slidePayload), sessionAesKey) +
+    geetestJs.getA(sessionAesKey)
+  );
 }
 
 /** 设备指纹 i 串模板（移植自 encrypt.js:1384 样本）。
@@ -344,8 +444,6 @@ export async function solveGeetestV3(
       `极验首次 get.php 状态异常: ${loadData.status} | resp=${describeResp(loadData)}`,
     );
   }
-  let s = loadData.data?.s ?? loadData.s ?? "";
-  if (!s) throw new Error("极验首次 get.php 未返回 s");
   // init 下发后续 slide 取图的主机（真实浏览器改打该 api_server）。
   const slideServer = loadData.data?.api_server ?? loadData.api_server ?? "";
   const slideHost = slideServer || API_SERVER;
@@ -394,14 +492,21 @@ export async function solveGeetestV3(
       `极验 slide get.php 状态异常: ${slideData.status} | resp=${describeResp(slideData)}`,
     );
   }
-  // 出图响应为顶层平铺（非 data 子层）：bg/fullbg/slice/challenge/s 均优先取顶层。
-  const sd = slideData.data ?? {};
-  const newChallenge = slideData.challenge ?? sd.challenge ?? challenge;
-  s = slideData.s ?? sd.s ?? s; // 用第二次 get.php 的新 s
-  const bgPath = slideData.bg ?? sd.bg ?? sd.slice ?? slideData.slice ?? "";
-  const fullbgPath = slideData.fullbg ?? sd.fullbg ?? "";
-  if (!bgPath || !fullbgPath) {
+  // 出图响应为顶层平铺（非 data 子层）：图片、challenge、c、s 均优先取顶层。
+  const slideConfig = slideData.data ?? {};
+  const slideChallenge = slideData.challenge ?? slideConfig.challenge ?? challenge;
+  const slideSecurityCode = slideData.s ?? slideConfig.s ?? "";
+  const trajectoryCipherParameters = slideData.c ?? slideConfig.c ?? [];
+  const gapImagePath =
+    slideData.bg ?? slideConfig.bg ?? slideConfig.slice ?? slideData.slice ?? "";
+  const fullBackgroundImagePath = slideData.fullbg ?? slideConfig.fullbg ?? "";
+  if (!gapImagePath || !fullBackgroundImagePath) {
     throw new Error("极验 slide get.php 未返回缺口图地址");
+  }
+  if (!slideSecurityCode || trajectoryCipherParameters.length < 5) {
+    throw new Error(
+      `极验 slide get.php 未返回完整轨迹加密参数 | resp=${describeResp(slideData)}`,
+    );
   }
 
   // 下载带缺口图与不带缺口图（static 服务器）。
@@ -410,7 +515,7 @@ export async function solveGeetestV3(
   // 优先用响应下发的 static_servers[0]（去尾斜杠），否则回退 slideHost。
   const staticServer = (
     slideData.static_servers?.[0] ??
-    sd.static_servers?.[0] ??
+    slideConfig.static_servers?.[0] ??
     STATIC_SERVER
   ).replace(/\/$/, "");
   const buildImageUrl = (path: string) =>
@@ -420,32 +525,46 @@ export async function solveGeetestV3(
   const imgClient = createClient(referer);
   imgClient.defaults.headers.common["Accept"] = "image/*,*/*;q=0.8";
 
-  const gapBytes = (
-    await imgClient.get(buildImageUrl(bgPath), { responseType: "arraybuffer" })
+  const gapBackgroundBytes = (
+    await imgClient.get(buildImageUrl(gapImagePath), {
+      responseType: "arraybuffer",
+    })
   ).data as ArrayBuffer;
-  const fullBytes = (
-    await imgClient.get(buildImageUrl(fullbgPath), {
+  const fullBackgroundBytes = (
+    await imgClient.get(buildImageUrl(fullBackgroundImagePath), {
       responseType: "arraybuffer",
     })
   ).data as ArrayBuffer;
 
   // ---- 缺口识别 ----
-  const { offset } = await calculateV3Offset(
-    Buffer.from(gapBytes),
-    Buffer.from(fullBytes),
+  const { offset: slideOffset } = await calculateV3Offset(
+    Buffer.from(gapBackgroundBytes),
+    Buffer.from(fullBackgroundBytes),
   );
 
   // ---- 轨迹生成 + slide 加密 ----
-  const track = buildTrack(offset);
-  const w = buildSlideW(gt, newChallenge, s, offset, track);
+  const trajectory = buildTrack(slideOffset);
+  const w = buildSlideW(
+    gt,
+    slideChallenge,
+    aeskey,
+    slideOffset,
+    trajectory,
+    trajectoryCipherParameters,
+    slideSecurityCode,
+  );
 
   // ---- 第二次 ajax.php (step2)：提交 w 拿 validate ----
   // step2 与 slide 取图走同一 api_server（真实抓包验证提交亦在 geevisit）。
+  // 真实抓包 step5 query：gt/challenge/lang/$_BCm=0/client_type=web/w/callback。
+  // $_BCm 是 fullpage/multilink 会话绑定参数，缺则服务端 error_03。
   const verifyData2 = await client.get(`https://${slideHost}/ajax.php`, {
     params: {
       gt,
-      challenge: newChallenge,
+      challenge: slideChallenge,
       lang: "zh-cn",
+      $_BCm: "0",
+      client_type: "web",
       w,
       callback: `geetest_${nowTimestamp()}`,
     },
@@ -463,5 +582,5 @@ export async function solveGeetestV3(
     );
   const seccode = `${validate}|jordan`;
 
-  return { challenge: newChallenge, validate, seccode };
+  return { challenge: slideChallenge, validate, seccode };
 }

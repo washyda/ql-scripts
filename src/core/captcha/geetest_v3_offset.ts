@@ -156,19 +156,40 @@ export async function calculateV3Offset(
   const gap = isScrambledPng ? restoreImage(gapRaw) : gapRaw;
   const full = isScrambledPng ? restoreImage(fullRaw) : fullRaw;
 
-  const xs: number[] = [];
+  // 逐列统计差异像素数。两张 JPG 的压缩噪声会在全图散布少量差异，
+  // 但真缺口列的差异像素数远高于噪声列。取差异峰值列，向左右扩展到
+  // 显著差异（>= 峰值一半）的连续区间，区间左端即缺口左边缘，比 min(x)
+  // 稳健（min 易被零星噪声拉到 0）。
+  // 关键：bg 图在 x=0 附近有「滑块小块起始覆盖层」（xpos:0 的 slice 叠加），
+  // 其差异像素数常与真缺口相当甚至更高，会误导峰值落到小块区域。
+  // 故峰值只在 slice 覆盖区之外查找（slice 宽约 52，取 60 起算留余量）。
+  const colDiffs = new Array<number>(gap.width).fill(0);
+  let totalDiff = 0;
   for (let y = 0; y < gap.height; y++) {
     for (let x = 0; x < gap.width; x++) {
       const i = (y * gap.width + x) * 4;
       if (pixelDiff(gap.data, full.data, i)) {
-        xs.push(x);
+        colDiffs[x]!++;
+        totalDiff++;
       }
     }
   }
-  if (xs.length === 0) {
+  if (totalDiff === 0) {
     throw new Error("未检测到缺口像素差异");
   }
-  xs.sort((a, b) => a - b);
+  // 跳过 slice 起始覆盖区（x<60）与右边缘渲染伪影（x>270），峰值只在中段查。
+  const SLICE_SKIP = 60;
+  const EDGE_SKIP = 270;
+  let peakX = SLICE_SKIP,
+    peakC = 0;
+  for (let x = SLICE_SKIP; x < EDGE_SKIP; x++)
+    if (colDiffs[x]! > peakC) {
+      peakC = colDiffs[x]!;
+      peakX = x;
+    }
+  const half = peakC / 2;
+  let left = peakX;
+  while (left > SLICE_SKIP && colDiffs[left - 1]! >= half) left--;
   // geetest-crack 取最左侧差异 x 减 3 作为滑块偏移
-  return { offset: xs[0]! - 3 };
+  return { offset: left - 3 };
 }
