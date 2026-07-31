@@ -121,13 +121,136 @@ function restoreImage(img: Image): Image {
   return { width: BG_WIDTH, height: BG_HEIGHT, data: out };
 }
 
+/**
+ * 极验 V3 的 52 块打乱图可以是 PNG，也可以是 JPEG。不能用文件格式判断：
+ * JPEG 仅是传输编码，312×160 的块布局仍然需要按 RESTORE_TABLE 还原。
+ */
+function isScrambledV3Image(img: Image): boolean {
+  return img.width >= BG_WIDTH && img.height >= BG_HEIGHT;
+}
+
 /** 像素差异是否过大（R、G、B 同时超阈值）。 */
 function pixelDiff(p1: Uint8Array, p2: Uint8Array, i: number): boolean {
   const diffMax = 50;
-  const dr = Math.abs(p1[i]! - p2[i]!);
-  const dg = Math.abs(p1[i + 1]! - p2[i + 1]!);
-  const db = Math.abs(p1[i + 2]! - p2[i + 2]!);
-  return dr > diffMax && dg > diffMax && db > diffMax;
+  const redDifference = Math.abs(p1[i]! - p2[i]!);
+  const greenDifference = Math.abs(p1[i + 1]! - p2[i + 1]!);
+  const blueDifference = Math.abs(p1[i + 2]! - p2[i + 2]!);
+  return (
+    redDifference > diffMax &&
+    greenDifference > diffMax &&
+    blueDifference > diffMax
+  );
+}
+
+function buildEdgeMap(image: Image): Uint8Array {
+  const grayscale = new Uint8Array(image.width * image.height);
+  for (let pixelIndex = 0; pixelIndex < grayscale.length; pixelIndex++) {
+    const sourceIndex = pixelIndex * 4;
+    grayscale[pixelIndex] = Math.round(
+      image.data[sourceIndex]! * 0.299 +
+        image.data[sourceIndex + 1]! * 0.587 +
+        image.data[sourceIndex + 2]! * 0.114,
+    );
+  }
+
+  const edges = new Uint8Array(grayscale.length);
+  for (let y = 1; y < image.height - 1; y++) {
+    for (let x = 1; x < image.width - 1; x++) {
+      const topLeft = grayscale[(y - 1) * image.width + x - 1]!;
+      const top = grayscale[(y - 1) * image.width + x]!;
+      const topRight = grayscale[(y - 1) * image.width + x + 1]!;
+      const left = grayscale[y * image.width + x - 1]!;
+      const right = grayscale[y * image.width + x + 1]!;
+      const bottomLeft = grayscale[(y + 1) * image.width + x - 1]!;
+      const bottom = grayscale[(y + 1) * image.width + x]!;
+      const bottomRight = grayscale[(y + 1) * image.width + x + 1]!;
+      const horizontalGradient =
+        -topLeft + topRight - 2 * left + 2 * right - bottomLeft + bottomRight;
+      const verticalGradient =
+        -topLeft - 2 * top - topRight + bottomLeft + 2 * bottom + bottomRight;
+      const gradientMagnitude =
+        Math.abs(horizontalGradient) + Math.abs(verticalGradient);
+      edges[y * image.width + x] = gradientMagnitude >= 180 ? 1 : 0;
+    }
+  }
+  return edges;
+}
+
+function findSliceTemplateOffset(
+  fullBackground: Image,
+  sliceImage: Image,
+): number | null {
+  if (
+    sliceImage.width > fullBackground.width ||
+    sliceImage.height > fullBackground.height
+  ) {
+    return null;
+  }
+
+  // 与 OpenCV TM_CCOEFF_NORMED 一样做归一化相关性匹配。滑块 PNG 有透明
+  // 背景，透明像素不能参与评分；只拿可见的纹理像素，且隔点采样控制成本。
+  const templatePoints: Array<readonly [x: number, y: number, value: number]> =
+    [];
+  for (let y = 2; y < sliceImage.height - 2; y++) {
+    for (let x = 2; x < sliceImage.width - 2; x += 2) {
+      const index = (y * sliceImage.width + x) * 4;
+      if (sliceImage.data[index + 3]! < 200) continue;
+      const value = Math.round(
+        sliceImage.data[index]! * 0.299 +
+          sliceImage.data[index + 1]! * 0.587 +
+          sliceImage.data[index + 2]! * 0.114,
+      );
+      templatePoints.push([x, y, value]);
+    }
+  }
+  if (templatePoints.length < 32) return null;
+
+  const templateMean =
+    templatePoints.reduce((sum, [, , value]) => sum + value, 0) /
+    templatePoints.length;
+  const templateVariance = templatePoints.reduce(
+    (sum, [, , value]) => sum + (value - templateMean) ** 2,
+    0,
+  );
+  if (templateVariance === 0) return null;
+
+  const maximumX = fullBackground.width - sliceImage.width;
+  const maximumY = fullBackground.height - sliceImage.height;
+  let bestScore = -1;
+  let bestX = 0;
+  for (let y = 0; y <= maximumY; y++) {
+    for (let x = 0; x <= maximumX; x++) {
+      let fullSum = 0;
+      for (const [templateX, templateY] of templatePoints) {
+        const index =
+          ((y + templateY) * fullBackground.width + x + templateX) * 4;
+        fullSum +=
+          fullBackground.data[index]! * 0.299 +
+          fullBackground.data[index + 1]! * 0.587 +
+          fullBackground.data[index + 2]! * 0.114;
+      }
+      const fullMean = fullSum / templatePoints.length;
+      let covariance = 0;
+      let fullVariance = 0;
+      for (const [templateX, templateY, templateValue] of templatePoints) {
+        const index =
+          ((y + templateY) * fullBackground.width + x + templateX) * 4;
+        const fullValue =
+          fullBackground.data[index]! * 0.299 +
+          fullBackground.data[index + 1]! * 0.587 +
+          fullBackground.data[index + 2]! * 0.114;
+        covariance += (templateValue - templateMean) * (fullValue - fullMean);
+        fullVariance += (fullValue - fullMean) ** 2;
+      }
+      const score = covariance / Math.sqrt(templateVariance * fullVariance);
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+      }
+    }
+  }
+  // 避免低置信度模板（此前会把真实 129 误判为 6）覆盖可靠差异定位。
+  return bestScore >= 0.55 ? bestX : null;
 }
 
 export interface V3OffsetResult {
@@ -136,25 +259,32 @@ export interface V3OffsetResult {
 }
 
 /**
- * 计算带缺口图与不带缺口图的缺口横向偏移。
+ * 计算滑块应移动的横向偏移。
  *
- * @param gapBytes 带缺口的背景图字节（PNG 打乱图或 JPEG 成品图）。
- * @param fullBytes 不带缺口的完整背景图字节（PNG 打乱图或 JPEG 成品图）。
+ * 优先按 Python 示例的 fullbg + slice 模板匹配；没有 slice 时回退到
+ * gap/fullbg 差异分析，以兼容旧版调用方和没有 slice 的响应。
  */
 export async function calculateV3Offset(
-  gapBytes: Buffer,
-  fullBytes: Buffer,
+  gapBackgroundBytes: Buffer,
+  fullBackgroundBytes: Buffer,
+  sliceBytes?: Buffer,
 ): Promise<V3OffsetResult> {
-  const gapRaw = await decodeImage(gapBytes);
-  const fullRaw = await decodeImage(fullBytes);
-  // 旧版极验 3 下发打乱的 PNG 源图（宽 312），需按还原表还原；
-  // 新版（NatFrp multilink）下发的 JPEG 已是成品图，直接对比即可。
-  const isScrambledPng =
-    !isJpeg(gapBytes) &&
-    gapRaw.width === BG_WIDTH &&
-    fullRaw.width === BG_WIDTH;
-  const gap = isScrambledPng ? restoreImage(gapRaw) : gapRaw;
-  const full = isScrambledPng ? restoreImage(fullRaw) : fullRaw;
+  const gapRaw = await decodeImage(gapBackgroundBytes);
+  const fullRaw = await decodeImage(fullBackgroundBytes);
+  // V3 源图通常是 312×160 的 52 块布局。应先还原再进行所有定位；
+  // 否则 fullbg 与 slice 的模板坐标不在同一个图像坐标系，必然得到错误偏移。
+  const isScrambled = isScrambledV3Image(gapRaw) && isScrambledV3Image(fullRaw);
+  const gap = isScrambled ? restoreImage(gapRaw) : gapRaw;
+  const full = isScrambled ? restoreImage(fullRaw) : fullRaw;
+  if (sliceBytes) {
+    const sliceImage = await decodeImage(sliceBytes);
+    const templateOffset = findSliceTemplateOffset(full, sliceImage);
+    if (templateOffset !== null) {
+      // slice/fullbg 的模板坐标就是滑块应移动的实际坐标。Python/OpenCV
+      // 成功链路同样直接使用该值；再减 3 会稳定落在缺口左侧。
+      return { offset: templateOffset };
+    }
+  }
 
   // 逐列统计差异像素数。两张 JPG 的压缩噪声会在全图散布少量差异，
   // 但真缺口列的差异像素数远高于噪声列。取差异峰值列，向左右扩展到

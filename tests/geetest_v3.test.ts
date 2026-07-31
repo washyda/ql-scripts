@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { buildTrack } from "../src/core/captcha/geetest_v3";
 import { calculateV3Offset } from "../src/core/captcha/geetest_v3_offset";
-import { getGeetestV3Js } from "../src/core/captcha/v3_js";
+import {
+  encodeTrajectory,
+  encryptTrajectory,
+  getGeetestV3Js,
+} from "../src/core/captcha/v3_js";
 import { PNG } from "pngjs";
 
 test("v3 js bridge produces slide w from given s", () => {
@@ -110,4 +115,89 @@ test("v3 offset detects a synthetic gap in restored images", async () => {
     Math.abs(result.offset - (targetGapX - 3)) <= 5,
     `expected ~${targetGapX - 3}, got ${result.offset}`,
   );
+});
+
+test("v3 slice template offset uses the actual slider coordinate", async () => {
+  const width = 140;
+  const height = 80;
+  const sliceWidth = 24;
+  const sliceHeight = 28;
+  const targetX = 73;
+  const targetY = 31;
+  const full = new PNG({ width, height });
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const value = (x * 37 + y * 101 + x * y * 13) & 255;
+      const index = (y * width + x) * 4;
+      full.data[index] = value;
+      full.data[index + 1] = (value * 3 + 17) & 255;
+      full.data[index + 2] = (value * 7 + 43) & 255;
+      full.data[index + 3] = 255;
+    }
+  }
+
+  const slice = new PNG({ width: sliceWidth, height: sliceHeight });
+  for (let y = 0; y < sliceHeight; y++) {
+    for (let x = 0; x < sliceWidth; x++) {
+      const sourceIndex = ((targetY + y) * width + targetX + x) * 4;
+      const targetIndex = (y * sliceWidth + x) * 4;
+      slice.data[targetIndex] = full.data[sourceIndex]!;
+      slice.data[targetIndex + 1] = full.data[sourceIndex + 1]!;
+      slice.data[targetIndex + 2] = full.data[sourceIndex + 2]!;
+      slice.data[targetIndex + 3] = 255;
+    }
+  }
+
+  const fullBytes = PNG.sync.write(full);
+  const result = await calculateV3Offset(
+    fullBytes,
+    fullBytes,
+    PNG.sync.write(slice),
+  );
+  assert.ok(
+    Math.abs(result.offset - targetX) <= 1,
+    `expected ~${targetX}, got ${result.offset}`,
+  );
+});
+
+test("v3 track matches the Python reference easing shape", () => {
+  const track = buildTrack(86, () => 0.99);
+  assert.equal(track[track.length - 1]![0], 86);
+  assert.ok(track.length >= 20);
+  assert.ok(track.some(([, y]) => y !== 0));
+
+  for (let index = 1; index < track.length; index++) {
+    assert.ok(track[index]![2] >= track[index - 1]![2]);
+  }
+  assert.deepEqual(track[track.length - 1], track[track.length - 2]);
+});
+
+test("v3 trajectory helpers match the bundled encoder shape", () => {
+  const js = getGeetestV3Js();
+  const track = [
+    [-32, -26, 0],
+    [0, 0, 0],
+    [0, 1, 135],
+    [18, 1, 210],
+    [86, 1, 420],
+    [86, 1, 520],
+  ] as const;
+  const encoded = encodeTrajectory(track);
+  assert.equal(encoded, js.mouseEncrypt(track));
+
+  const encrypted = encryptTrajectory(encoded, [2, 0, 3, 0, 5], "0a1b");
+  assert.equal(encrypted.length, encoded.length + 2);
+  assert.notEqual(encrypted, encoded);
+});
+
+test("v3 AES slide body and RSA tail keep their production shape", () => {
+  const js = getGeetestV3Js();
+  const aeskey = "0123456789abcdef";
+  const body = js.aesEncrypt(JSON.stringify({ lang: "zh-cn" }), aeskey);
+  const tail = js.getA(aeskey);
+
+  assert.ok(body.length > 0);
+  assert.equal(tail.length, 256);
+  assert.match(tail, /^[0-9a-f]+$/);
 });

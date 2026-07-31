@@ -22,36 +22,40 @@ import {
   type TrajectoryCipherParameters,
 } from "./v3_js";
 
-const API_SERVER = "api.geetest.com";
+// The legacy V3 fullpage bootstrap used by NatFrp is served from apiv6.  The
+// slide phase itself is redirected to api.geevisit.com by the response.
+const API_SERVER = "apiv6.geetest.com";
 const STATIC_SERVER = "static.geetest.com";
 const BROWSER_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
-interface BrowserPerformanceTiming {
-  navigationStart: number;
-  unloadEventStart: number;
-  unloadEventEnd: number;
-  redirectStart: number;
-  redirectEnd: number;
-  fetchStart: number;
-  domainLookupStart: number;
-  domainLookupEnd: number;
-  connectStart: number;
-  secureConnectionStart: number;
-  connectEnd: number;
-  requestStart: number;
-  responseStart: number;
-  responseEnd: number;
-  domLoading: number;
-  domInteractive: number;
-  domContentLoadedEventStart: number;
-  domContentLoadedEventEnd: number;
-  domComplete: number;
-  loadEventStart: number;
-  loadEventEnd: number;
+interface SlidePerformanceTiming {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+  g: number;
+  h: number;
+  i: number;
+  j: number;
+  k: number;
+  l: number;
+  m: number;
+  n: number;
+  o: number;
+  p: number;
+  q: number;
+  r: number;
+  s: number;
+  t: number;
+  u: number;
 }
 
-function generatePerformanceTiming(baseTimestamp = Date.now()): BrowserPerformanceTiming {
+function generatePerformanceTiming(
+  baseTimestamp = Date.now(),
+): SlidePerformanceTiming {
   const fetchStart = baseTimestamp + 1;
   const domainLookupStart = fetchStart + 4;
   const domainLookupEnd = domainLookupStart + 10;
@@ -72,27 +76,27 @@ function generatePerformanceTiming(baseTimestamp = Date.now()): BrowserPerforman
   const loadEventEnd = loadEventStart + 2;
 
   return {
-    navigationStart: baseTimestamp,
-    unloadEventStart,
-    unloadEventEnd,
-    redirectStart: 0,
-    redirectEnd: 0,
-    fetchStart,
-    domainLookupStart,
-    domainLookupEnd,
-    connectStart,
-    secureConnectionStart,
-    connectEnd,
-    requestStart,
-    responseStart,
-    responseEnd,
-    domLoading,
-    domInteractive,
-    domContentLoadedEventStart,
-    domContentLoadedEventEnd,
-    domComplete,
-    loadEventStart,
-    loadEventEnd,
+    a: baseTimestamp,
+    b: unloadEventStart,
+    c: unloadEventEnd,
+    d: 0,
+    e: 0,
+    f: fetchStart,
+    g: domainLookupStart,
+    h: domainLookupEnd,
+    i: connectStart,
+    j: connectEnd,
+    k: secureConnectionStart,
+    l: requestStart,
+    m: responseStart,
+    n: responseEnd,
+    o: domLoading,
+    p: domInteractive,
+    q: domContentLoadedEventStart,
+    r: domContentLoadedEventEnd,
+    s: domComplete,
+    t: loadEventStart,
+    u: loadEventEnd,
   };
 }
 
@@ -125,16 +129,20 @@ interface GeetestResponseData {
   result?: string;
   validate?: string;
   gt?: string;
-  // 错误响应载体：极验失败时多带 msg/error_code/desc 判定根因
+  // 错误载体：极验 slide 失败常返回 success/message，而不是 status/data。
+  success?: number | boolean;
+  message?: string;
   msg?: string;
   error_code?: string | number;
   desc?: string;
 }
 
-/** 把极验响应体压成可读字符串，便于错误信息里定位根因（error_code/msg/result 等）。 */
+/** 把极验响应体压成可读字符串，保留顶层 success/message 便于定位 fail/forbidden。 */
 function describeResp(r: GeetestResponseData): string {
   return JSON.stringify({
     status: r.status,
+    success: r.success,
+    message: r.message,
     msg: r.msg,
     error_code: r.error_code,
     desc: r.desc,
@@ -147,8 +155,40 @@ function nowTimestamp(): string {
   return `${Date.now()}`;
 }
 
-function createClient(referer: string): AxiosInstance {
-  return axios.create({
+/** Minimal per-solve cookie jar. Axios in Node does not retain Set-Cookie
+ * between requests, unlike a browser or Python requests.Session. */
+class GeetestCookieJar {
+  private readonly cookies = new Map<string, string>();
+
+  absorb(setCookie: string | string[] | undefined): void {
+    const lines = Array.isArray(setCookie)
+      ? setCookie
+      : setCookie
+        ? [setCookie]
+        : [];
+    for (const line of lines) {
+      const pair = line.split(";", 1)[0];
+      const separator = pair?.indexOf("=") ?? -1;
+      if (separator <= 0) continue;
+      const name = pair!.slice(0, separator).trim();
+      const value = pair!.slice(separator + 1).trim();
+      if (name) this.cookies.set(name, value);
+    }
+  }
+
+  header(): string | undefined {
+    if (this.cookies.size === 0) return undefined;
+    return [...this.cookies.entries()]
+      .map(([name, value]) => `${name}=${value}`)
+      .join("; ");
+  }
+}
+
+function createClient(
+  referer: string,
+  cookieJar?: GeetestCookieJar,
+): AxiosInstance {
+  const client = axios.create({
     timeout: 20_000,
     headers: {
       "User-Agent": BROWSER_UA,
@@ -158,6 +198,17 @@ function createClient(referer: string): AxiosInstance {
       Origin: new URL(referer).origin,
     },
   });
+  if (!cookieJar) return client;
+  client.interceptors.request.use((config) => {
+    const cookie = cookieJar.header();
+    if (cookie) config.headers.set("Cookie", cookie);
+    return config;
+  });
+  client.interceptors.response.use((response) => {
+    cookieJar.absorb(response.headers["set-cookie"]);
+    return response;
+  });
+  return client;
 }
 
 /** 从 JSONP 文本解析出对象；若已是对象则直接返回。 */
@@ -172,33 +223,33 @@ function parsePayload(payload: unknown): GeetestResponseData {
 }
 
 /** 根据 offset 生成一条拟真滑动轨迹 [[x, y, t], ...]。 */
-function buildTrack(offset: number): GeetestTrajectoryPoint[] {
-  const track: GeetestTrajectoryPoint[] = [
-    [-32, -26, 0],
+export function buildTrack(
+  slideOffset: number,
+  random: () => number = Math.random,
+): GeetestTrajectoryPoint[] {
+  const randomInt = (minimum: number, maximum: number) =>
+    minimum + Math.floor(random() * (maximum - minimum + 1));
+  const trajectory: GeetestTrajectoryPoint[] = [
+    [randomInt(-50, -10), randomInt(-50, -10), 0],
     [0, 0, 0],
   ];
-  let x = 0;
-  let t = 90;
-  // 起步加速、中段匀速、末段减速；y 加小幅抖动拟真（人手滑动非纯水平）
-  const steps = Math.max(20, Math.round(offset * 1.5));
-  let y = 0;
-  for (let i = 1; i <= steps; i++) {
-    const progress = i / steps;
-    const ease =
-      progress < 0.5
-        ? 2 * progress * progress
-        : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-    x = Math.round(offset * ease);
-    y += Math.round((Math.random() - 0.5) * 3);
-    t += 8 + Math.round(Math.random() * 6);
-    track.push([x, y, t]);
+  const pointCount = 10 + Math.floor(slideOffset / 2);
+  let elapsedTime = randomInt(50, 100);
+  let previousX = 0;
+
+  for (let index = 0; index < pointCount; index++) {
+    const progress = index / pointCount;
+    const x = Math.round(
+      (progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress)) * slideOffset,
+    );
+    elapsedTime += randomInt(10, 50);
+    if (x === previousX) continue;
+    trajectory.push([x, 0, elapsedTime]);
+    previousX = x;
   }
-  // 末尾停留若干点模拟松手
-  for (let i = 0; i < 4; i++) {
-    t += 60 + Math.round(Math.random() * 40);
-    track.push([offset, y, t]);
-  }
-  return track;
+  // Python 参考实现会原样追加末点；该零时差会被轨迹压缩器忽略。
+  trajectory.push(trajectory[trajectory.length - 1]!);
+  return trajectory;
 }
 
 /** 构造 slide 提交的 w = AES(JSON(slidePayload), sessionAesKey) + RSA(sessionAesKey)。
@@ -346,15 +397,22 @@ function buildFullpageW(
     gt,
     challenge,
     offline: false,
-    product: "popup",
-    width: "100%",
+    new_captcha: true,
+    product: "float",
+    width: "300px",
     api_server: API_SERVER,
     https: true,
     protocol: "https://",
-    static_servers: ["static.geetest.com"],
-    aspect_radio: { slide: 103, click: 128 },
+    static_servers: ["static.geetest.com/", "static.geevisit.com/"],
+    voice: "/static/js/voice.1.2.6.js",
+    click: "/static/js/click.3.1.2.js",
+    beeline: "/static/js/beeline.1.0.1.js",
+    fullpage: "/static/js/fullpage.9.2.0-guwyxh.js",
+    slide: "/static/js/slide.7.9.3.js",
+    geetest: "/static/js/geetest.6.0.9.js",
+    aspect_radio: { slide: 103, click: 128, voice: 128, beeline: 50 },
     type: "fullpage",
-    cc: 4,
+    cc: 16,
     ww: true,
     i: buildFingerprint(js, ua),
   };
@@ -370,29 +428,55 @@ function buildAjaxW(
   gt: string,
   challenge: string,
   aeskey: string,
-  ua: string,
-  iStr: string,
+  cipherParameters: TrajectoryCipherParameters,
+  securityCode: string,
 ): string {
-  const passtime = 1500 + Math.floor(Math.random() * 1500);
-  const pw = (x: string) => js.pwrx(x);
+  const startX = 400 + Math.floor(Math.random() * 201);
+  const startY = 400 + Math.floor(Math.random() * 101);
+  const pointCount = 18;
+  const trace: GeetestTrajectoryPoint[] = [[startX, startY, 0]];
+  for (let index = 1; index <= pointCount; index++) {
+    const progress = index / pointCount;
+    trace.push([
+      Math.round(startX + (853 - startX) * progress),
+      Math.round(startY + (288 - startY) * progress),
+      index * (45 + Math.floor(Math.random() * 20)),
+    ]);
+  }
+  const passtime = trace[trace.length - 1]![2]!;
+  const tt = encryptTrajectory(
+    js.mouseEncrypt(trace),
+    cipherParameters,
+    securityCode,
+  );
   const u = {
     lang: "zh-cn",
     type: "fullpage",
-    t: -1,
-    light: -1,
-    s: pw(pw("")),
-    h: pw(pw("")),
-    hh: pw(""),
-    i: pw(iStr),
-    hi: pw(""),
+    tt,
+    light: "DIV_0",
+    s: "c7c3e21112fe4f741921cb3e4ff9f7cb",
+    h: "321f9af1e098233dbd03f250fd2b5e21",
+    hh: "39bd9cad9e425c3a8f51610fd506e3b3",
+    hi: "09eb21b3ae9542a9bc1e8b63b3d9a467",
     vip_order: -1,
-    ua,
     ct: -1,
+    ep: {
+      v: "9.2.0-guwyxh",
+      te: false,
+      ["$_BBn"]: true,
+      ven: "Google Inc. (AMD)",
+      ren: "ANGLE (AMD, AMD Radeon RX 6750 GRE 12GB (0x000073DF) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      fp: trace[0],
+      lp: trace[trace.length - 1],
+      em: { ph: 0, cp: 0, ek: "11", wd: 1, nt: 0, si: 0, sc: 0 },
+      tm: generatePerformanceTiming(),
+      dnf: "dnf",
+      by: 0,
+    },
     passtime,
-    reservedParam: null,
-    jType: "ajax",
-    rp: pw(gt + challenge + String(passtime)),
-    e: pw("{}"),
+    rp: js.lmWn(gt + challenge + String(passtime)),
+    captcha_token: "112439067",
+    tsfq: "xovrayel",
   };
   return js.aesEncrypt(JSON.stringify(u), aeskey);
 }
@@ -418,13 +502,13 @@ export async function solveGeetestV3(
   challenge: string,
   referer = "https://www.natfrp.com/user/",
 ): Promise<V3SolveResult> {
-  const client = createClient(referer);
+  const cookieJar = new GeetestCookieJar();
+  const client = createClient(referer, cookieJar);
   const baseParams = { gt, challenge, lang: "zh-cn" };
   const js = getGeetestV3Js();
   const ua = BROWSER_UA;
   // 会话级 aeskey：init 与 ajax step1 共用，服务端据 init 的 RSA 尾段解出并缓存。
   const aeskey = js.makeAeskey();
-  const iStr = buildFingerprint(js, ua);
 
   // ---- 第一次 get.php（带 fullpage-w）：取初始 s/c/api_server，推进会话 ----
   // 真实浏览器此步带 pt=0/client_type=web/w=fullpageW；不带 w 则后续 slide 不出图。
@@ -447,6 +531,11 @@ export async function solveGeetestV3(
   // init 下发后续 slide 取图的主机（真实浏览器改打该 api_server）。
   const slideServer = loadData.data?.api_server ?? loadData.api_server ?? "";
   const slideHost = slideServer || API_SERVER;
+  const fullpageCipherParameters = loadData.data?.c ?? loadData.c ?? [];
+  const fullpageSecurityCode = loadData.data?.s ?? loadData.s ?? "";
+  if (fullpageCipherParameters.length < 5 || fullpageSecurityCode.length < 2) {
+    throw new Error("极验首次 get.php 未返回完整 fullpage 加密参数");
+  }
 
   // ---- 第一次 ajax.php (step1，带 ajax-w)：推进会话至 slide 阶段 ----
   // 必须带 w 且**无 RSA 尾段**（服务端已缓存会话 aeskey）；返回 data.result==="slide"。
@@ -455,7 +544,14 @@ export async function solveGeetestV3(
       ...baseParams,
       pt: "0",
       client_type: "web",
-      w: buildAjaxW(js, gt, challenge, aeskey, ua, iStr),
+      w: buildAjaxW(
+        js,
+        gt,
+        challenge,
+        aeskey,
+        fullpageCipherParameters,
+        fullpageSecurityCode,
+      ),
       callback: `geetest_${nowTimestamp()}`,
     },
   });
@@ -494,11 +590,12 @@ export async function solveGeetestV3(
   }
   // 出图响应为顶层平铺（非 data 子层）：图片、challenge、c、s 均优先取顶层。
   const slideConfig = slideData.data ?? {};
-  const slideChallenge = slideData.challenge ?? slideConfig.challenge ?? challenge;
+  const slideChallenge =
+    slideData.challenge ?? slideConfig.challenge ?? challenge;
   const slideSecurityCode = slideData.s ?? slideConfig.s ?? "";
   const trajectoryCipherParameters = slideData.c ?? slideConfig.c ?? [];
-  const gapImagePath =
-    slideData.bg ?? slideConfig.bg ?? slideConfig.slice ?? slideData.slice ?? "";
+  const gapImagePath = slideData.bg ?? slideConfig.bg ?? "";
+  const sliceImagePath = slideData.slice ?? slideConfig.slice ?? "";
   const fullBackgroundImagePath = slideData.fullbg ?? slideConfig.fullbg ?? "";
   if (!gapImagePath || !fullBackgroundImagePath) {
     throw new Error("极验 slide get.php 未返回缺口图地址");
@@ -522,7 +619,7 @@ export async function solveGeetestV3(
     path.startsWith("http")
       ? path
       : `https://${staticServer}/${path.replace(/^\//, "")}`;
-  const imgClient = createClient(referer);
+  const imgClient = createClient(referer, cookieJar);
   imgClient.defaults.headers.common["Accept"] = "image/*,*/*;q=0.8";
 
   const gapBackgroundBytes = (
@@ -535,11 +632,19 @@ export async function solveGeetestV3(
       responseType: "arraybuffer",
     })
   ).data as ArrayBuffer;
+  const sliceBytes = sliceImagePath
+    ? ((
+        await imgClient.get(buildImageUrl(sliceImagePath), {
+          responseType: "arraybuffer",
+        })
+      ).data as ArrayBuffer)
+    : undefined;
 
   // ---- 缺口识别 ----
   const { offset: slideOffset } = await calculateV3Offset(
     Buffer.from(gapBackgroundBytes),
     Buffer.from(fullBackgroundBytes),
+    sliceBytes ? Buffer.from(sliceBytes) : undefined,
   );
 
   // ---- 轨迹生成 + slide 加密 ----
@@ -575,7 +680,9 @@ export async function solveGeetestV3(
       `极验校验状态非 success: ${verifyResult.status} | resp=${describeResp(verifyResult)}`,
     );
   }
-  const validate = verifyResult.data?.validate ?? "";
+  // V3 ajax success responses may be JSONP objects with validate at the top
+  // level (NatFrp), while some deployments nest it under data.
+  const validate = verifyResult.validate ?? verifyResult.data?.validate ?? "";
   if (!validate)
     throw new Error(
       `极验 ajax.php 未返回 validate | resp=${describeResp(verifyResult)}`,
