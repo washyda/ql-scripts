@@ -39,7 +39,9 @@ import { optionalEnv, requiredEnv } from "../src/core/env";
 import { formatTime } from "../src/core/time";
 import {
   MiHoYoApiClient,
+  assertCloudgameOk,
   createDirectTokenSession,
+  type CloudgameNotification,
   type CloudgameSessionContext,
   loginWithPassword,
   type WalletInfoLike,
@@ -58,29 +60,81 @@ function splitPairs(value: string | undefined): string[] {
 interface WalletStat {
   freeMinutes: number;
   playCardMsg: string;
+  coinNum: number;
   coinMinutes: number;
 }
 
-/** 解析钱包响应为可读统计。 */
-function parseWallet(wallet: WalletInfoLike): WalletStat {
-  const freeTime = wallet.data?.free_time?.free_time ?? "";
-  const playCardMsg = wallet.data?.play_card?.short_msg ?? "未知";
-  const coinNum = wallet.data?.coin?.coin_num ?? "";
-  const freeMinutes = freeTime ? Number(freeTime) : -1;
-  // 原点 coin_num 每 10 点约 1 分钟（云原神常规换算）
-  const coinMinutes = coinNum ? Number(coinNum) / 10 : 0;
+/** 将接口下发的数值字段（可能是 string 或 number）解析为有限数字。 */
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/** 解析钱包响应体为可读统计；freeMinutes / coinNum 为 -1 表示字段缺失。 */
+export function parseWallet(wallet: WalletInfoLike): WalletStat {
+  const freeMinutes = toFiniteNumber(wallet.data?.free_time?.free_time);
+  const coinNum = toFiniteNumber(wallet.data?.coin?.coin_num);
   return {
-    freeMinutes: Number.isFinite(freeMinutes) ? freeMinutes : -1,
-    playCardMsg,
-    coinMinutes,
+    freeMinutes: freeMinutes ?? -1,
+    playCardMsg: wallet.data?.play_card?.short_msg || "未知",
+    coinNum: coinNum ?? -1,
+    // 原点 coin_num 每 10 点约 1 分钟（云原神常规换算）
+    coinMinutes: coinNum === undefined ? 0 : coinNum / 10,
   };
 }
 
-function formatMinutes(stat: WalletStat): string {
+export function formatMinutes(stat: WalletStat): string {
   const free = stat.freeMinutes >= 0 ? `${stat.freeMinutes} 分钟` : "未知";
   const coin =
-    stat.coinMinutes > 0 ? `约 ${stat.coinMinutes.toFixed(0)} 分钟` : "0";
+    stat.coinNum >= 0
+      ? `${stat.coinNum} 点（约 ${stat.coinMinutes.toFixed(0)} 分钟）`
+      : "未知";
   return `免费时长 ${free} | 畅玩卡 ${stat.playCardMsg} | 原点 ${coin}`;
+}
+
+/** 弹窗通知 msg 字段内嵌的 JSON 载荷。 */
+interface NotificationPayload {
+  msg?: string;
+  num?: number;
+  over_num?: number;
+}
+
+/**
+ * 解析弹窗通知中的奖励说明。
+ *
+ * msg 字段本身是一段 JSON 字符串，形如
+ * `{"msg":"每日登录奖励","num":600,"over_num":0}`；
+ * 非 JSON 或结构不符时返回 undefined，由调用方退回钱包差值。
+ */
+export function parseNotificationReward(
+  notification: CloudgameNotification,
+): string | undefined {
+  const raw = notification.msg;
+  if (!raw) return undefined;
+
+  let payload: NotificationPayload;
+  try {
+    payload = JSON.parse(raw) as NotificationPayload;
+  } catch {
+    return undefined;
+  }
+  if (!payload || typeof payload !== "object") return undefined;
+
+  const num = toFiniteNumber(payload.num);
+  const overNum = toFiniteNumber(payload.over_num) ?? 0;
+  const label = payload.msg;
+  if (num === undefined) return label || undefined;
+
+  if (overNum > 0) {
+    return `${label || "签到奖励"}：获得 ${num} 分钟（免费时长已达上限，超出 ${overNum} 分钟）`;
+  }
+  return `${label || "签到奖励"}：获得 ${num} 分钟`;
 }
 
 /** 领取每日签到奖励并回报本次新增免费时长。 */
@@ -91,25 +145,49 @@ async function claimCheckinRewards(
   info: (m: string) => void,
   warn: (m: string) => void,
 ): Promise<void> {
-  const resp = await client.listNotifications(ctx);
-  if (resp.status !== 200)
-    throw new Error(`listNotifications HTTP ${resp.status}`);
-  const list = resp.data?.data?.list ?? [];
+  // 复刻客户端调用顺序：读取弹窗前先请求公告。失败不影响签到。
+  try {
+    await client.getAnnouncementInfo(ctx);
+  } catch (error) {
+    warn(
+      `获取公告信息失败（已忽略）：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const notifications = await client.listNotifications(ctx);
+  assertCloudgameOk(notifications, "获取签到弹窗");
+
+  const list = notifications.data?.list ?? [];
   if (list.length === 0) {
     info("今日已签到或无新奖励。");
     return;
   }
 
+  const rewards: string[] = [];
   for (const notif of list) {
     const id = notif.id ?? "";
     if (!id) continue;
-    const ack = await client.ackNotification(ctx, id);
-    if (ack.status !== 200)
-      throw new Error(`ackNotification HTTP ${ack.status}`);
+    assertCloudgameOk(await client.ackNotification(ctx, id), "领取签到奖励");
+    const reward = parseNotificationReward(notif);
+    if (reward) rewards.push(reward);
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  const after = parseWallet(await client.getWallet(ctx));
+  for (const reward of rewards) info(reward);
+
+  // 领取后钱包有短暂延迟，稍等再读一次以计算差值。
+  await sleep(1_000);
+  let after: WalletStat;
+  try {
+    const wallet = await client.getWallet(ctx);
+    assertCloudgameOk(wallet, "查询钱包");
+    after = parseWallet(wallet);
+  } catch (error) {
+    warn(
+      `签到已完成，但复查钱包失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+
   if (beforeMinutes >= 0 && after.freeMinutes >= 0) {
     let earned = after.freeMinutes - beforeMinutes;
     if (earned < 0) {
@@ -119,9 +197,18 @@ async function claimCheckinRewards(
     info(
       `签到完成：本次获得 ${earned} 分钟，当前免费时长 ${after.freeMinutes} 分钟。`,
     );
-  } else {
-    info("签到完成，但未能计算本次新增免费时长。");
+    return;
   }
+
+  if (after.freeMinutes >= 0) {
+    info(`签到完成，当前免费时长 ${after.freeMinutes} 分钟。`);
+    return;
+  }
+  info(
+    rewards.length > 0
+      ? "签到完成（奖励详情见上方通知）。"
+      : "签到完成，但未能计算本次新增免费时长。",
+  );
 }
 
 function valueAt(
@@ -144,6 +231,7 @@ async function queryAndClaim(
   let wallet: WalletInfoLike;
   try {
     wallet = await client.getWallet(ctx);
+    assertCloudgameOk(wallet, "查询钱包");
   } catch (error) {
     logger.error(
       `查询钱包失败：${error instanceof Error ? error.message : String(error)}`,
@@ -152,6 +240,9 @@ async function queryAndClaim(
   }
   const before = parseWallet(wallet);
   logger.info(`当前钱包：${formatMinutes(before)}`);
+  if (before.freeMinutes < 0) {
+    logger.warn("钱包响应缺少免费时长字段，接口结构可能已变更。");
+  }
 
   try {
     await claimCheckinRewards(

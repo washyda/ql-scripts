@@ -26,6 +26,8 @@ const URLS = {
   notif:
     "https://api-cloudgame.mihoyo.com/hk4e_cg_cn/gamer/api/listNotifications?status=NotificationStatusUnread&type=NotificationTypePopup&is_sort=true",
   ack: "https://api-cloudgame.mihoyo.com/hk4e_cg_cn/gamer/api/ackNotification",
+  announcement:
+    "https://api-cloudgame.mihoyo.com/hk4e_cg_cn/gamer/api/getAnnouncementInfo",
 };
 
 export interface DeviceProfile {
@@ -113,13 +115,33 @@ export function buildDirectTokenHeaders(
   };
 }
 
-export interface WalletInfoLike {
-  data?: {
-    free_time?: { free_time?: string };
-    play_card?: { short_msg?: string };
-    coin?: { coin_num?: string };
-  };
+/** 云游戏接口统一返回壳：retcode 为 0 才代表业务成功。 */
+export interface CloudgameEnvelope<T> {
+  retcode?: number;
+  message?: string;
+  data?: T;
 }
+
+/** 登录态失效（combo_token 过期）时云游戏接口返回的 retcode。 */
+export const CLOUDGAME_RETCODE_TOKEN_EXPIRED = -100;
+
+export interface WalletData {
+  free_time?: { free_time?: string };
+  play_card?: { short_msg?: string };
+  coin?: { coin_num?: string };
+}
+
+export type WalletInfoLike = CloudgameEnvelope<WalletData>;
+
+/** 未读弹窗通知；msg 本身是一段 JSON 字符串。 */
+export interface CloudgameNotification {
+  id?: string;
+  msg?: string;
+}
+
+export type NotificationListInfo = CloudgameEnvelope<{
+  list?: CloudgameNotification[];
+}>;
 
 type ScalarHeaders = Record<string, string>;
 
@@ -344,34 +366,63 @@ export class MiHoYoApiClient {
     };
   }
 
-  /** 查询钱包（免费时长 / 畅玩卡 / 原点）。 */
+  /**
+   * 查询钱包（免费时长 / 畅玩卡 / 原点）。
+   *
+   * 返回的是解包后的响应体，调用方需自行检查 retcode
+   * （见 {@link assertCloudgameOk}）。
+   */
   async getWallet(ctx: CloudgameSessionContext): Promise<WalletInfoLike> {
     const headers = this.cloudgameHeaders(ctx);
-    return this.session.get(URLS.wallet, headers);
+    const resp = await this.session.get<WalletInfoLike>(URLS.wallet, headers);
+    if (resp.status !== 200) throw new Error(`wallet HTTP ${resp.status}`);
+    return resp.data ?? {};
   }
 
-  /** 列出未读签到弹窗奖励。 */
+  /**
+   * 拉取公告信息。
+   *
+   * 云·原神客户端在读取签到弹窗前会先请求公告，MHYY 也保留了这一步；
+   * 部分账号若跳过公告请求会拿不到当日的每日登录奖励弹窗。
+   * 仅用于复刻真实调用顺序，返回值不参与签到判定。
+   */
+  async getAnnouncementInfo(
+    ctx: CloudgameSessionContext,
+  ): Promise<MiHoYoResponse<unknown>> {
+    const headers = this.cloudgameHeaders(ctx);
+    return this.session.get(URLS.announcement, headers);
+  }
+
+  /** 列出未读签到弹窗奖励；返回解包后的响应体。 */
   async listNotifications(
     ctx: CloudgameSessionContext,
-  ): Promise<MiHoYoResponse<{ data?: { list?: Array<{ id?: string }> } }>> {
+  ): Promise<NotificationListInfo> {
     const headers = this.cloudgameHeaders(ctx);
-    return this.session.get<{ data?: { list?: Array<{ id?: string }> } }>(
+    const resp = await this.session.get<NotificationListInfo>(
       URLS.notif,
       headers,
     );
+    if (resp.status !== 200) {
+      throw new Error(`listNotifications HTTP ${resp.status}`);
+    }
+    return resp.data ?? {};
   }
 
-  /** 确认（领取）指定签到奖励。 */
+  /** 确认（领取）指定签到奖励；返回解包后的响应体。 */
   async ackNotification(
     ctx: CloudgameSessionContext,
     rewardId: string,
-  ): Promise<MiHoYoResponse<unknown>> {
+  ): Promise<CloudgameEnvelope<unknown>> {
     const headers = this.cloudgameHeaders(ctx);
-    return this.session.post(
+    const resp = await this.session.post<CloudgameEnvelope<unknown>>(
       URLS.ack,
       headers,
       JSON.stringify({ id: rewardId }),
     );
+    if (resp.status !== 200) {
+      throw new Error(`ackNotification HTTP ${resp.status}`);
+    }
+    return resp.data ?? {};
   }
 
   private cloudgameHeaders(ctx: CloudgameSessionContext): ScalarHeaders {
@@ -399,6 +450,23 @@ export class MiHoYoApiClient {
       "x-rpc-vendor_id": "2",
     };
   }
+}
+
+/** 云游戏接口 retcode 非 0 时抛出带上下文的错误。 */
+export function assertCloudgameOk(
+  envelope: CloudgameEnvelope<unknown>,
+  action: string,
+): void {
+  const retcode = envelope.retcode ?? -1;
+  if (retcode === 0) return;
+  const message = envelope.message || "未知错误";
+  if (retcode === CLOUDGAME_RETCODE_TOKEN_EXPIRED) {
+    throw new Error(
+      `${action} 失败：登录态已过期（retcode ${retcode}: ${message}），` +
+        "请重新抓包更新 YS_CG_TOKEN 与 YS_CG_DEVICE_ID",
+    );
+  }
+  throw new Error(`${action} 失败：retcode ${retcode}: ${message}`);
 }
 
 function ensureShape<T>(data: unknown): MiHoYoApiResult<T> {
