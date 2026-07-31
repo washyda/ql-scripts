@@ -2,7 +2,7 @@
 
 这是一个由青龙直接订阅并执行 TypeScript 源文件的脚本仓库，不生成或维护 JavaScript 产物。
 
-可执行任务统一放在 `scripts/` 目录，共享代码放在 `src/core/`。仓库自带 `scripts/hello_world.ts`，用于验证订阅、TypeScript 运行环境和环境变量读取。
+可执行任务统一放在 `scripts/` 目录，共享代码放在 `src/core/`。
 
 ## 青龙面板订阅
 
@@ -22,11 +22,7 @@
 
 白名单只把 `scripts/` 下第一层 `.ts` 文件识别为定时任务；依赖文件规则会同时拉取任务引用的 `src/core/` 共享代码，但不会把共享代码创建成任务。
 
-保存后运行订阅，在「定时任务」中应出现 **Hello World 测试**。它的默认六段 cron 是每天 08:00：
-
-```cron
-0 0 8 * * *
-```
+保存后运行订阅，青龙会按每个任务文件头中的六段 cron 创建定时任务。
 
 ## 命令行导入
 
@@ -41,7 +37,7 @@ ql repo "REPOSITORY_URL" "^scripts/[^/]+\.ts$" "" "^src/core/.*\.ts$" "main"
 如果旧版青龙只拉取文件、没有自动创建任务，可根据订阅日志中的仓库路径手动新建：
 
 ```bash
-task <订阅仓库目录>/scripts/hello_world.ts
+task <订阅仓库目录>/scripts/natfrp_daily_checkin.ts
 ```
 
 ## Node.js 第三方依赖
@@ -62,27 +58,18 @@ pngjs
 @jsquash/jpeg
 ```
 
-Hello World 本身不调用这些包，因此即使还未安装也可以先运行验证。使用共享 HTTP、时间或验证码工具的正式任务需要先安装对应依赖。
+使用共享 HTTP、时间或验证码工具的任务需要先安装对应依赖。
 
 ## 环境变量
 
-Hello World 没有必填变量。可在「环境变量」中添加：
+NatFrp 任务可在「环境变量」中添加：
 
 | 名称            | 示例                 | 是否必填   | 说明                                                     |
 | --------------- | -------------------- | ---------- | -------------------------------------------------------- |
-| `HELLO_NAME`    | `小明`               | 否         | 自定义问候名称，默认 `QingLong`                          |
 | `NATFRP_TOKEN`  | `your_api_token`     | 查询时必填 | NatFrp 访问密钥 / Token，多账号使用 `&` 或换行分隔       |
 | `NATFRP_COOKIE` | `PHPSESSID=...; ...` | 签到时必填 | 当前官网登录会话的完整 Cookie，多账号使用 `&` 或换行分隔 |
 
 NatFrp 的账号查询支持 Token，但签到接口只支持 SESSION。两个变量可以同时配置：脚本查询时可携带 Token，签到时只发送 Cookie，不会把 `Authorization` 头带入签到请求。`scripts/natfrp_daily_checkin.ts` 会先通过官网 CGI 检查验证要求，并在需要时使用共享的极验 3 滑块工具完成校验。
-
-运行日志示例：
-
-```text
-[INFO] 开始执行：Hello World 测试
-[INFO] Hello, 小明! TypeScript 脚本运行成功。
-[INFO] 执行完成
-```
 
 ## 本地开发
 
@@ -90,17 +77,17 @@ NatFrp 的账号查询支持 Token，但签到接口只支持 SESSION。两个�
 
 ```bash
 npm install
-npm run dev:hello
+npm run dev:natfrp
 npm run check
 ```
 
-| 命令                | 用途                                       |
-| ------------------- | ------------------------------------------ |
-| `npm run dev:hello` | 使用 tsx 直接运行 `scripts/hello_world.ts` |
-| `npm run typecheck` | TypeScript 严格类型检查                    |
-| `npm test`          | 运行单元测试                               |
-| `npm run format`    | 格式化仓库                                 |
-| `npm run check`     | 执行格式、类型和测试检查                   |
+| 命令                 | 用途                                                |
+| -------------------- | --------------------------------------------------- |
+| `npm run dev:natfrp` | 使用 tsx 直接运行 `scripts/natfrp_daily_checkin.ts` |
+| `npm run typecheck`  | TypeScript 严格类型检查                             |
+| `npm test`           | 运行单元测试                                        |
+| `npm run format`     | 格式化仓库                                          |
+| `npm run check`      | 执行格式、类型和测试检查                            |
 
 ## 新增任务
 
@@ -118,7 +105,7 @@ npm run check
 ```text
 .
 ├─ scripts/
-│  └─ hello_world.ts       # 青龙直接订阅和执行的任务
+│  └─ natfrp_daily_checkin.ts # 青龙直接订阅和执行的任务
 ├─ src/core/               # 环境变量、日志、HTTP、时间和任务工具
 ├─ templates/              # 可执行任务模板
 ├─ tests/                  # 单元测试

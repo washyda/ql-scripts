@@ -26,7 +26,7 @@ src/core/*.ts
 | 依赖文件            | `^src/core/.*\.ts$`   |
 | 后缀                | `ts`                  |
 
-运行订阅后，青龙应从 `scripts/hello_world.ts` 读取名称和 cron，并生成 **Hello World 测试**任务。
+运行订阅后，青龙应从 `scripts/` 下的任务文件读取名称和 cron 并创建对应任务。
 
 ## 命令行
 
@@ -37,12 +37,12 @@ ql repo "REPOSITORY_URL" "^scripts/[^/]+\.ts$" "" "^src/core/.*\.ts$" "main"
 旧版青龙没有自动生成任务时手动添加：
 
 ```bash
-task <订阅仓库目录>/scripts/hello_world.ts
+task <订阅仓库目录>/scripts/natfrp_daily_checkin.ts
 ```
 
 ## 验收
 
-先在「依赖管理」确认任务所需 NodeJS 包已经安装，再运行任务。Hello World 无第三方包调用，可直接用于检查 TS 执行能力。
+先在「依赖管理」确认任务所需 NodeJS 包已经安装，再运行任务。
 
 ## NatFrp 任务迁移
 

@@ -30,7 +30,7 @@
 
 ```bash
 npm install
-npm run dev:hello
+npm run dev:natfrp
 npm run check
-npx tsx scripts/hello_world.ts
+npx tsx scripts/natfrp_daily_checkin.ts
 ```
