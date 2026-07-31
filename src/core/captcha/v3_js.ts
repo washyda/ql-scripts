@@ -28,7 +28,11 @@ type JsBindings = {
   get_a: (s: string) => string;
 };
 
-export type GeetestTrajectoryPoint = readonly [x: number, y: number, time: number];
+export type GeetestTrajectoryPoint = readonly [
+  x: number,
+  y: number,
+  time: number,
+];
 export type TrajectoryCipherParameters = readonly number[];
 
 const TRAJECTORY_CHARSET =
@@ -53,10 +57,15 @@ function encodeTrajectoryNumber(value: number): string {
   if (highDigit > 0 && highDigit < TRAJECTORY_CHARSET.length) {
     encoded += `$${TRAJECTORY_CHARSET[highDigit]}`;
   }
-  return encoded + TRAJECTORY_CHARSET[absoluteValue % TRAJECTORY_CHARSET.length];
+  return (
+    encoded + TRAJECTORY_CHARSET[absoluteValue % TRAJECTORY_CHARSET.length]
+  );
 }
 
-function getTrajectoryDirectionCode(deltaX: number, deltaY: number): string | null {
+function getTrajectoryDirectionCode(
+  deltaX: number,
+  deltaY: number,
+): string | null {
   const directionIndex = TRAJECTORY_DIRECTION_PATTERNS.findIndex(
     ([patternX, patternY]) => patternX === deltaX && patternY === deltaY,
   );
@@ -69,7 +78,9 @@ function getTrajectoryDirectionCode(deltaX: number, deltaY: number): string | nu
 export function encodeTrajectory(
   trajectory: readonly GeetestTrajectoryPoint[],
 ): string {
-  const compressedPoints: Array<[deltaX: number, deltaY: number, deltaTime: number]> = [];
+  const compressedPoints: Array<
+    [deltaX: number, deltaY: number, deltaTime: number]
+  > = [];
   let accumulatedStationaryTime = 0;
 
   for (let pointIndex = 0; pointIndex + 1 < trajectory.length; pointIndex++) {
@@ -143,7 +154,8 @@ export function encryptTrajectory(
     const insertionPosition =
       (quadraticCoefficient * cipherByte * cipherByte +
         linearCoefficient * cipherByte +
-        constantCoefficient) % encodedTrajectory.length;
+        constantCoefficient) %
+      encodedTrajectory.length;
     encryptedTrajectory =
       encryptedTrajectory.slice(0, insertionPosition) +
       String.fromCharCode(cipherByte) +

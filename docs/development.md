@@ -11,7 +11,7 @@
 ## 新任务流程
 
 1. 复制 `templates/task.ts.template` 为 `scripts/example.ts`。
-2. 修改脚本元数据，特别是 `script-path` 及其紧跟的中文使用说明注释（含用途、环境变量与多账号配置说明）。
+2. 任务开头必须使用青龙可识别的 `// @name`、`// @description`、`// @cron` 和 `// cron ... script-path=...` 行注释；其后紧跟中文使用说明注释（含用途、环境变量与多账号配置说明）。
 3. 使用 `optionalEnv` 或 `requiredEnv` 读取配置，使用 `splitAccounts` 处理多账号。
 4. 为纯函数、变量解析和关键分支添加测试。
 5. 在 README 或任务文档中声明环境变量及青龙依赖。

@@ -1,9 +1,7 @@
-/**
- * @name 请修改任务名称
- * @description 请填写任务用途
- * @cron 0 0 8 * * *
- * cron "0 0 8 * * *" script-path=scripts/example.ts,tag=ql-scripts
- */
+// @name 请修改任务名称
+// @description 请填写任务用途
+// @cron 0 0 8 * * *
+// cron "0 0 8 * * *" script-path=scripts/example.ts,tag=ql-scripts
 
 /**
  * ==================== 使用说明 ====================

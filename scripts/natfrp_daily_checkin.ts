@@ -1,9 +1,7 @@
-/**
- * @name NatFrp 每日签到与流量查询
- * @description NatFrp（樱花 Frp）每日自动签到并查询账号流量与会员信息
- * @cron 0 15 8 * * *
- * cron "0 15 8 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
- */
+// @name NatFrp 每日签到与流量查询
+// @description NatFrp（樱花 Frp）每日自动签到并查询账号流量与会员信息
+// @cron 0 15 8 * * *
+// cron "0 15 8 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
 
 /**
  * ==================== NatFrp 签到与流量查询脚本使用说明 ====================

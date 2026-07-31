@@ -2,6 +2,8 @@ node_modules
 coverage
 scratch
 package-lock.json
+.claude
+templates/*.template
 
 # 极验 3 第三方加密算法 JS 资源，不参与格式化
 src/core/captcha/v3/js
