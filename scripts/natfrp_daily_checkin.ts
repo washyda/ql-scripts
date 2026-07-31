@@ -72,18 +72,18 @@ export function formatTraffic(value: number | undefined | null): string {
 }
 
 /** 脱敏用户名或邮箱 */
-export function maskUsername(name: string | undefined): string {
-  if (!name) return "***";
-  if (name.includes("@")) {
-    const parts = name.split("@");
+export function maskUsername(value: string | undefined): string {
+  if (!value) return "***";
+  if (value.includes("@")) {
+    const parts = value.split("@");
     const user = parts[0] || "";
     const domain = parts.slice(1).join("@");
     const maskedUser =
       user.length > 2 ? `${user.slice(0, 2)}***` : `${user}***`;
     return `${maskedUser}@${domain}`;
   }
-  if (name.length <= 2) return `${name}***`;
-  return `${name.slice(0, 2)}***${name.slice(-1)}`;
+  if (value.length <= 2) return `${value}***`;
+  return `${value.slice(0, 2)}***${value.slice(-1)}`;
 }
 
 /** 根据凭据生成请求头 (支持同时带入 Authorization 与 Cookie) */
