@@ -10,13 +10,18 @@ test("every task starts with QingLong line-comment metadata", () => {
     if (!filename.endsWith(".ts")) continue;
     const header = readFileSync(join(scriptsDirectory, filename), "utf8")
       .split("\n")
-      .slice(0, 4)
+      .slice(0, 5)
       .join("\n");
 
     assert.match(header, /^\/\/ @name\s+\S.+$/mu, filename);
     assert.match(header, /^\/\/ @description\s+\S.+$/mu, filename);
     assert.match(header, /^\/\/ @cron\s+\S.+$/mu, filename);
     assert.match(header, /script-path=scripts\/[a-z0-9_]+\.ts/u, filename);
+    assert.match(
+      header,
+      /^\/\/ name:\s*"[^"]+"\n^\/\/ cron\s+"[^"]+"\s+script-path=/mu,
+      `${filename} 的订阅器兼容元数据必须位于 @ 元数据之前`,
+    );
 
     const source = readFileSync(join(scriptsDirectory, filename), "utf8");
     assert.match(
