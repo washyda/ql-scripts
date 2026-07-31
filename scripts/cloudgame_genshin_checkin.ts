@@ -1,7 +1,7 @@
 // @name 云·原神自动签到与时长查询
 // @description 米哈游云·原神账号自动登录、领取每日签到奖励并查询免费时长
-// @cron 0 12 8 * * *
-// cron "0 12 8 * * *" script-path=scripts/cloudgame_genshin_checkin.ts,tag=ql-scripts
+// @cron 12 8 * * *
+// cron "12 8 * * *" script-path=scripts/cloudgame_genshin_checkin.ts,tag=ql-scripts
 // name: "云·原神自动签到与时长查询"
 
 /**
