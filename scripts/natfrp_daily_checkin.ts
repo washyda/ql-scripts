@@ -1,7 +1,7 @@
 // @name NatFrp 每日签到与流量查询
 // @description NatFrp（樱花 Frp）每日自动签到并查询账号流量与会员信息
-// @cron 0 0-5 9 * * *
-// cron "0 0-5 9 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
+// @cron 0 0~59 8 * * *
+// cron "0 0~59 8 * * *" script-path=scripts/natfrp_daily_checkin.ts,tag=ql-scripts
 // name: "NatFrp 每日签到与流量查询"
 
 /**
@@ -20,6 +20,7 @@
  *    - 纯 Node.js 运行，零第三方打码 API、零无头浏览器依赖。
  *    - 极验 3 滑块通过 pngjs 缺口识别 + Node vm 执行 RC4/RSA 加密 JS 离线解算，
  *      完整复刻官方 api.geetest.com 的两次 get.php + ajax.php 链路拿真实 validate。
+ *    - 定时规则会在每天 08:00–08:59 随机选定一个分钟；任务启动后再随机延迟 1–30 秒。
  * ===========================================================================
  */
 
@@ -27,7 +28,12 @@ import axios, { type AxiosRequestConfig } from "axios";
 import { optionalEnv, requiredEnv, splitAccounts } from "../src/core/env";
 import { solveGeetestV3Slider } from "../src/core/captcha/geetest_v3";
 import { request, requestWithResponse } from "../src/core/http";
-import { defineTask, runTask } from "../src/core/task";
+import {
+  defineTask,
+  randomDelayBetween,
+  runTask,
+  sleep,
+} from "../src/core/task";
 import { formatTime } from "../src/core/time";
 
 export interface NatFrpV4UserInfo {
@@ -298,6 +304,9 @@ export async function executeCheckinV4(
 
 export const natfrpCheckinTask = defineTask({
   async run({ logger }) {
+    const startupDelay = randomDelayBetween(1_000, 30_000);
+    logger.info(`随机延迟 ${(startupDelay / 1000).toFixed(1)} 秒后开始签到。`);
+    await sleep(startupDelay);
     const tokenEnv = optionalEnv("NATFRP_TOKEN");
     const cookieEnv = optionalEnv("NATFRP_COOKIE");
     const mainEnv = cookieEnv || tokenEnv;

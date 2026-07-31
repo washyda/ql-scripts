@@ -1,7 +1,7 @@
 // @name 云·原神自动签到与时长查询
 // @description 米哈游云·原神账号自动登录、领取每日签到奖励并查询免费时长
-// @cron 0 0-5 9 * * *
-// cron "0 0-5 9 * * *" script-path=scripts/cloudgame_genshin_checkin.ts,tag=ql-scripts
+// @cron 0 0~59 8 * * *
+// cron "0 0~59 8 * * *" script-path=scripts/cloudgame_genshin_checkin.ts,tag=ql-scripts
 // name: "云·原神自动签到与时长查询"
 
 /**
@@ -21,10 +21,16 @@
  * 3. 运行环境：
  *    - 极验 v4 缺口识别经 pngjs 解码 PNG + Scharr/ZNCC 模板匹配实现，零 native 依赖、零无头浏览器。
  *    - 米哈游账号密码经 RSA-1024 + 自定义 base64 加密提交，全部使用 Node 内置 crypto。
+ *    - 定时规则会在每天 08:00–08:59 随机选定一个分钟；任务启动后再随机延迟 1–30 秒。
  * ===========================================================================
  */
 
-import { defineTask, runTask } from "../src/core/task";
+import {
+  defineTask,
+  randomDelayBetween,
+  runTask,
+  sleep,
+} from "../src/core/task";
 import { requiredEnv } from "../src/core/env";
 import { formatTime } from "../src/core/time";
 import {
@@ -115,6 +121,9 @@ async function claimCheckinRewards(
 
 export const cloudgameCheckinTask = defineTask({
   async run({ logger }) {
+    const startupDelay = randomDelayBetween(1_000, 30_000);
+    logger.info(`随机延迟 ${(startupDelay / 1000).toFixed(1)} 秒后开始签到。`);
+    await sleep(startupDelay);
     logger.info(`${formatTime()} 读取云·原神账号配置`);
 
     const accounts = splitPairs(requiredEnv("YS_CG_ACCOUNT"));
