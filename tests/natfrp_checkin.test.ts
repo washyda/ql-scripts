@@ -8,6 +8,8 @@ import {
   containsPhpSession,
   formatTraffic,
   maskUsername,
+  NATFRP_CAPTCHA_RETRY_DELAY_MS,
+  solveNatFrpCaptchaWithRetry,
 } from "../scripts/natfrp_daily_checkin";
 
 test("formatTraffic handles bytes and GiB correctly", () => {
@@ -75,4 +77,34 @@ test("buildNatFrpCaptchaRequest matches the website Geetest bootstrap request", 
   assert.equal(config.method, "GET");
   assert.equal(config.headers?.["Cookie"], "PHPSESSID=test-session");
   assert.equal(config.headers?.["Authorization"], undefined);
+});
+
+test("NatFrp captcha solver retries five times with a 30-second delay", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const warnings: string[] = [];
+  const expected = {
+    challenge: "challenge",
+    validate: "validate",
+    seccode: "validate|jordan",
+  };
+
+  const result = await solveNatFrpCaptchaWithRetry(
+    "gt",
+    "challenge",
+    { warn: (message: string) => warnings.push(message) },
+    async () => {
+      calls += 1;
+      if (calls < 6) throw new Error("temporary geetest failure");
+      return expected;
+    },
+    async (milliseconds) => {
+      delays.push(milliseconds);
+    },
+  );
+
+  assert.deepEqual(result, expected);
+  assert.equal(calls, 6);
+  assert.deepEqual(delays, Array(5).fill(NATFRP_CAPTCHA_RETRY_DELAY_MS));
+  assert.equal(warnings.length, 5);
 });

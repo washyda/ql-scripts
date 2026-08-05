@@ -36,6 +36,43 @@ import {
 } from "../src/core/task";
 import { formatTime } from "../src/core/time";
 
+/** 极验服务偶发返回 fail 时，首次尝试之外的最大重试次数。 */
+export const NATFRP_CAPTCHA_MAX_RETRIES = 5;
+/** 两次极验解算尝试之间的等待时间。 */
+export const NATFRP_CAPTCHA_RETRY_DELAY_MS = 30_000;
+
+type NatFrpCaptchaSolver = typeof solveGeetestV3Slider;
+
+/**
+ * 极验 ajax.php 偶发不会返回 validate。对此重试完整的本地滑块解算，
+ * 避免单次服务端瞬时失败直接终止每日任务。
+ */
+export async function solveNatFrpCaptchaWithRetry(
+  gt: string,
+  challenge: string,
+  logger: { warn(message: string): void },
+  solver: NatFrpCaptchaSolver = solveGeetestV3Slider,
+  wait: (milliseconds: number) => Promise<void> = sleep,
+) {
+  for (let attempt = 0; attempt <= NATFRP_CAPTCHA_MAX_RETRIES; attempt += 1) {
+    try {
+      return await solver(gt, challenge, "https://www.natfrp.com/user/");
+    } catch (error) {
+      if (attempt === NATFRP_CAPTCHA_MAX_RETRIES) {
+        throw error;
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        `极验解算第 ${attempt + 1} 次失败：${message}；30 秒后进行第 ${attempt + 2} 次尝试（最多重试 ${NATFRP_CAPTCHA_MAX_RETRIES} 次）。`,
+      );
+      await wait(NATFRP_CAPTCHA_RETRY_DELAY_MS);
+    }
+  }
+
+  throw new Error("极验解算重试流程意外结束");
+}
+
 export interface NatFrpV4UserInfo {
   id?: number;
   name?: string;
@@ -393,10 +430,10 @@ export const natfrpCheckinTask = defineTask({
         }
 
         logger.info(`获取到极验参数 gt=${gt}，开始完整滑块协议链路解算...`);
-        const captchaSolved = await solveGeetestV3Slider(
+        const captchaSolved = await solveNatFrpCaptchaWithRetry(
           gt,
           requirement.challenge,
-          "https://www.natfrp.com/user/",
+          logger,
         );
         logger.info(
           `解算完成！极验下发的真实校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
@@ -423,10 +460,10 @@ export const natfrpCheckinTask = defineTask({
           logger.warn("二次补尝缺少极验 challenge，无法解算，跳过");
           continue;
         }
-        const captchaSolved = await solveGeetestV3Slider(
+        const captchaSolved = await solveNatFrpCaptchaWithRetry(
           gt,
           checkinResult.challenge,
-          "https://www.natfrp.com/user/",
+          logger,
         );
 
         checkinResult = await executeCheckinV4(credential, {
