@@ -36,42 +36,12 @@ import {
 } from "../src/core/task";
 import { formatTime } from "../src/core/time";
 
-/** 极验服务偶发返回 fail 时，首次尝试之外的最大重试次数。 */
-export const NATFRP_CAPTCHA_MAX_RETRIES = 5;
-/** 两次极验解算尝试之间的等待时间。 */
+/** 一次签到最多执行的完整极验流程轮数。 */
+export const NATFRP_CAPTCHA_MAX_ATTEMPTS = 5;
+/** 两轮完整极验签到流程之间的等待时间。 */
 export const NATFRP_CAPTCHA_RETRY_DELAY_MS = 30_000;
 
 type NatFrpCaptchaSolver = typeof solveGeetestV3Slider;
-
-/**
- * 极验 ajax.php 偶发不会返回 validate。对此重试完整的本地滑块解算，
- * 避免单次服务端瞬时失败直接终止每日任务。
- */
-export async function solveNatFrpCaptchaWithRetry(
-  gt: string,
-  challenge: string,
-  logger: { warn(message: string): void },
-  solver: NatFrpCaptchaSolver = solveGeetestV3Slider,
-  wait: (milliseconds: number) => Promise<void> = sleep,
-) {
-  for (let attempt = 0; attempt <= NATFRP_CAPTCHA_MAX_RETRIES; attempt += 1) {
-    try {
-      return await solver(gt, challenge, "https://www.natfrp.com/user/");
-    } catch (error) {
-      if (attempt === NATFRP_CAPTCHA_MAX_RETRIES) {
-        throw error;
-      }
-
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warn(
-        `极验解算第 ${attempt + 1} 次失败：${message}；30 秒后进行第 ${attempt + 2} 次尝试（最多重试 ${NATFRP_CAPTCHA_MAX_RETRIES} 次）。`,
-      );
-      await wait(NATFRP_CAPTCHA_RETRY_DELAY_MS);
-    }
-  }
-
-  throw new Error("极验解算重试流程意外结束");
-}
 
 export interface NatFrpV4UserInfo {
   id?: number;
@@ -229,6 +199,21 @@ export interface NatFrpGeetestConfig {
   success?: boolean | number;
 }
 
+export interface NatFrpCheckinRequirement {
+  needCaptcha: boolean;
+  message: string;
+  gt?: string | undefined;
+  challenge?: string | undefined;
+}
+
+export interface NatFrpCheckinResult {
+  success: boolean;
+  message: string;
+  gt?: string | undefined;
+  challenge?: string | undefined;
+  needCaptcha?: boolean | undefined;
+}
+
 export function buildNatFrpCaptchaRequest(
   credential: string,
 ): AxiosRequestConfig {
@@ -239,12 +224,9 @@ export function buildNatFrpCaptchaRequest(
   };
 }
 
-export async function getNatFrpCheckinRequirement(credential: string): Promise<{
-  needCaptcha: boolean;
-  message: string;
-  gt?: string | undefined;
-  challenge?: string | undefined;
-}> {
+export async function getNatFrpCheckinRequirement(
+  credential: string,
+): Promise<NatFrpCheckinRequirement> {
   try {
     const response = await request<
       NatFrpApiResponse<NatFrpGeetestConfig> | NatFrpGeetestConfig
@@ -285,13 +267,7 @@ export async function getNatFrpCheckinRequirement(credential: string): Promise<{
 export async function executeCheckinV4(
   credential: string,
   captchaParams?: { challenge: string; validate: string; seccode: string },
-): Promise<{
-  success: boolean;
-  message: string;
-  gt?: string | undefined;
-  challenge?: string | undefined;
-  needCaptcha?: boolean | undefined;
-}> {
+): Promise<NatFrpCheckinResult> {
   try {
     const response = await requestWithResponse<
       NatFrpApiResponse<{ gt?: string; challenge?: string }>
@@ -337,6 +313,82 @@ export async function executeCheckinV4(
       message: errMessage,
     };
   }
+}
+
+interface NatFrpCaptchaFlowDependencies {
+  getRequirement?: (credential: string) => Promise<NatFrpCheckinRequirement>;
+  solveCaptcha?: NatFrpCaptchaSolver;
+  submitCheckin?: (
+    credential: string,
+    captchaParams?: { challenge: string; validate: string; seccode: string },
+  ) => Promise<NatFrpCheckinResult>;
+  wait?: (milliseconds: number) => Promise<void>;
+}
+
+/**
+ * 执行完整签到流程。极验 challenge 是一次性的，因此重试必须从业务站
+ * `/sign?gt` 重新申请参数开始，不能只重复调用极验解算器。
+ */
+export async function executeNatFrpCheckinWithRetry(
+  credential: string,
+  logger: { info(message: string): void; warn(message: string): void },
+  dependencies: NatFrpCaptchaFlowDependencies = {},
+): Promise<NatFrpCheckinResult> {
+  const getRequirement =
+    dependencies.getRequirement ?? getNatFrpCheckinRequirement;
+  const solveCaptcha = dependencies.solveCaptcha ?? solveGeetestV3Slider;
+  const submitCheckin = dependencies.submitCheckin ?? executeCheckinV4;
+  const wait = dependencies.wait ?? sleep;
+
+  for (let attempt = 1; attempt <= NATFRP_CAPTCHA_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      logger.info(
+        `正在检查或初始化签到极验校验参数（第 ${attempt}/${NATFRP_CAPTCHA_MAX_ATTEMPTS} 轮）...`,
+      );
+      const requirement = await getRequirement(credential);
+
+      if (!requirement.needCaptcha) {
+        logger.info("当前账号无需极验，正在提交自动签到...");
+        const result = await submitCheckin(credential);
+        if (result.success || !result.needCaptcha) return result;
+        throw new Error(`签到提交后仍要求极验：${result.message}`);
+      }
+
+      logger.info(
+        "触发极验拼图验证，正在离线解算极验 3 滑块缺口与算力校验码...",
+      );
+      if (!requirement.challenge) {
+        throw new Error("NatFrp 未下发极验 challenge");
+      }
+      const gt = requirement.gt || "78aaca6a49add69b47090ba07c00fa3a";
+      logger.info(`获取到极验参数 gt=${gt}，开始完整滑块协议链路解算...`);
+      const captchaSolved = await solveCaptcha(
+        gt,
+        requirement.challenge,
+        "https://www.natfrp.com/user/",
+      );
+      logger.info(
+        `解算完成！极验下发的真实校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
+      );
+      logger.info("正在将极验解算参数发送至后端完成自动签到...");
+      const result = await submitCheckin(credential, {
+        challenge: captchaSolved.challenge,
+        validate: captchaSolved.validate,
+        seccode: captchaSolved.seccode,
+      });
+      if (result.success || !result.needCaptcha) return result;
+      throw new Error(`极验签到提交失败：${result.message}`);
+    } catch (error) {
+      if (attempt === NATFRP_CAPTCHA_MAX_ATTEMPTS) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        `完整极验签到第 ${attempt} 轮失败：${message}；30 秒后重新申请极验参数并进行第 ${attempt + 1} 轮（最多 ${NATFRP_CAPTCHA_MAX_ATTEMPTS} 轮）。`,
+      );
+      await wait(NATFRP_CAPTCHA_RETRY_DELAY_MS);
+    }
+  }
+
+  throw new Error("极验签到重试流程意外结束");
 }
 
 export const natfrpCheckinTask = defineTask({
@@ -406,72 +458,10 @@ export const natfrpCheckinTask = defineTask({
         continue;
       }
 
-      logger.info("正在检查或初始化签到极验校验参数...");
-      const requirement = await getNatFrpCheckinRequirement(credential);
-
-      let checkinResult: {
-        success: boolean;
-        message: string;
-        needCaptcha?: boolean | undefined;
-        gt?: string | undefined;
-        challenge?: string | undefined;
-      };
-
-      if (requirement.needCaptcha) {
-        logger.info(
-          `触发极验拼图验证，正在离线解算极验 3 滑块缺口与算力校验码...`,
-        );
-        // challenge 必须由 /sign?gt 签发，客户端不可自造；自造脏值会被
-        // 极验 nginx 层直接 403（不进业务逻辑）。
-        const gt = requirement.gt || "78aaca6a49add69b47090ba07c00fa3a";
-        if (!requirement.challenge) {
-          logger.warn("极验 challenge 未下发，无法启动滑块解算，跳过签到");
-          continue;
-        }
-
-        logger.info(`获取到极验参数 gt=${gt}，开始完整滑块协议链路解算...`);
-        const captchaSolved = await solveNatFrpCaptchaWithRetry(
-          gt,
-          requirement.challenge,
-          logger,
-        );
-        logger.info(
-          `解算完成！极验下发的真实校验码: validate=${captchaSolved.validate.slice(0, 10)}...`,
-        );
-
-        logger.info("正在将极验解算参数发送至后端完成自动签到...");
-        checkinResult = await executeCheckinV4(credential, {
-          challenge: captchaSolved.challenge,
-          validate: captchaSolved.validate,
-          seccode: captchaSolved.seccode,
-        });
-      } else {
-        logger.info("当前账号无需极验，正在提交自动签到...");
-        checkinResult = await executeCheckinV4(credential, undefined);
-      }
-
-      if (!checkinResult.success && checkinResult.needCaptcha) {
-        logger.info("二次补尝：重新解算极验滑块并发送...");
-        const gt =
-          checkinResult.gt ||
-          requirement.gt ||
-          "78aaca6a49add69b47090ba07c00fa3a";
-        if (!checkinResult.challenge) {
-          logger.warn("二次补尝缺少极验 challenge，无法解算，跳过");
-          continue;
-        }
-        const captchaSolved = await solveNatFrpCaptchaWithRetry(
-          gt,
-          checkinResult.challenge,
-          logger,
-        );
-
-        checkinResult = await executeCheckinV4(credential, {
-          challenge: captchaSolved.challenge,
-          validate: captchaSolved.validate,
-          seccode: captchaSolved.seccode,
-        });
-      }
+      const checkinResult = await executeNatFrpCheckinWithRetry(
+        credential,
+        logger,
+      );
 
       if (checkinResult.success) {
         logger.info(`🎉 签到成功！结果: ${checkinResult.message}`);

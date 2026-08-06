@@ -6,10 +6,11 @@ import {
   buildNatFrpHeaders,
   buildNatFrpSessionHeaders,
   containsPhpSession,
+  executeNatFrpCheckinWithRetry,
   formatTraffic,
   maskUsername,
+  NATFRP_CAPTCHA_MAX_ATTEMPTS,
   NATFRP_CAPTCHA_RETRY_DELAY_MS,
-  solveNatFrpCaptchaWithRetry,
 } from "../scripts/natfrp_daily_checkin";
 
 test("formatTraffic handles bytes and GiB correctly", () => {
@@ -79,32 +80,132 @@ test("buildNatFrpCaptchaRequest matches the website Geetest bootstrap request", 
   assert.equal(config.headers?.["Authorization"], undefined);
 });
 
-test("NatFrp captcha solver retries five times with a 30-second delay", async () => {
-  let calls = 0;
+test("NatFrp captcha retry refreshes one-time challenge before each solve", async () => {
+  let requirementCalls = 0;
+  const solvedChallenges: string[] = [];
   const delays: number[] = [];
   const warnings: string[] = [];
-  const expected = {
-    challenge: "challenge",
-    validate: "validate",
-    seccode: "validate|jordan",
-  };
 
-  const result = await solveNatFrpCaptchaWithRetry(
-    "gt",
-    "challenge",
-    { warn: (message: string) => warnings.push(message) },
-    async () => {
-      calls += 1;
-      if (calls < 6) throw new Error("temporary geetest failure");
-      return expected;
+  const result = await executeNatFrpCheckinWithRetry(
+    "PHPSESSID=test-session",
+    {
+      info: () => undefined,
+      warn: (message: string) => warnings.push(message),
     },
-    async (milliseconds) => {
-      delays.push(milliseconds);
+    {
+      getRequirement: async () => {
+        requirementCalls += 1;
+        return {
+          needCaptcha: true,
+          message: "captcha required",
+          gt: "gt",
+          challenge: `challenge-${requirementCalls}`,
+        };
+      },
+      solveCaptcha: async (_gt, challenge) => {
+        solvedChallenges.push(challenge);
+        if (solvedChallenges.length < 3) {
+          throw new Error("temporary geetest failure");
+        }
+        return {
+          challenge,
+          validate: "validate",
+          seccode: "validate|jordan",
+        };
+      },
+      submitCheckin: async () => ({ success: true, message: "signed" }),
+      wait: async (milliseconds) => {
+        delays.push(milliseconds);
+      },
     },
   );
 
-  assert.deepEqual(result, expected);
-  assert.equal(calls, 6);
-  assert.deepEqual(delays, Array(5).fill(NATFRP_CAPTCHA_RETRY_DELAY_MS));
-  assert.equal(warnings.length, 5);
+  assert.deepEqual(result, { success: true, message: "signed" });
+  assert.equal(requirementCalls, 3);
+  assert.deepEqual(solvedChallenges, [
+    "challenge-1",
+    "challenge-2",
+    "challenge-3",
+  ]);
+  assert.deepEqual(delays, Array(2).fill(NATFRP_CAPTCHA_RETRY_DELAY_MS));
+  assert.equal(warnings.length, 2);
+});
+
+test("NatFrp captcha retry stops after five complete attempts without a final delay", async () => {
+  let requirementCalls = 0;
+  let solveCalls = 0;
+  let waitCalls = 0;
+
+  await assert.rejects(
+    executeNatFrpCheckinWithRetry(
+      "PHPSESSID=test-session",
+      { info: () => undefined, warn: () => undefined },
+      {
+        getRequirement: async () => {
+          requirementCalls += 1;
+          return {
+            needCaptcha: true,
+            message: "captcha required",
+            gt: "gt",
+            challenge: `challenge-${requirementCalls}`,
+          };
+        },
+        solveCaptcha: async () => {
+          solveCalls += 1;
+          throw new Error("persistent geetest failure");
+        },
+        wait: async () => {
+          waitCalls += 1;
+        },
+      },
+    ),
+    /persistent geetest failure/,
+  );
+
+  assert.equal(requirementCalls, NATFRP_CAPTCHA_MAX_ATTEMPTS);
+  assert.equal(solveCalls, NATFRP_CAPTCHA_MAX_ATTEMPTS);
+  assert.equal(waitCalls, NATFRP_CAPTCHA_MAX_ATTEMPTS - 1);
+});
+
+test("NatFrp captcha retry restarts at bootstrap after a rejected submission", async () => {
+  const requestedChallenges: string[] = [];
+  const submittedChallenges: string[] = [];
+
+  const result = await executeNatFrpCheckinWithRetry(
+    "PHPSESSID=test-session",
+    { info: () => undefined, warn: () => undefined },
+    {
+      getRequirement: async () => {
+        const challenge = `challenge-${requestedChallenges.length + 1}`;
+        requestedChallenges.push(challenge);
+        return {
+          needCaptcha: true,
+          message: "captcha required",
+          gt: "gt",
+          challenge,
+        };
+      },
+      solveCaptcha: async (_gt, challenge) => ({
+        challenge,
+        validate: "validate",
+        seccode: "validate|jordan",
+      }),
+      submitCheckin: async (_credential, captchaParams) => {
+        submittedChallenges.push(captchaParams?.challenge ?? "");
+        if (submittedChallenges.length === 1) {
+          return {
+            success: false,
+            needCaptcha: true,
+            message: "验证码校验失败",
+          };
+        }
+        return { success: true, message: "signed" };
+      },
+      wait: async () => undefined,
+    },
+  );
+
+  assert.equal(result.success, true);
+  assert.deepEqual(requestedChallenges, ["challenge-1", "challenge-2"]);
+  assert.deepEqual(submittedChallenges, ["challenge-1", "challenge-2"]);
 });
